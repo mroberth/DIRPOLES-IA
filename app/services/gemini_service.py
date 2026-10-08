@@ -119,6 +119,18 @@ def _seccion_totales(resumen: dict[str, Any]) -> str:
     return "\n".join(lineas)
 
 
+def _grafico_mermaid_distribucion(clave: str, distribuciones: dict[str, Any]) -> str:
+    filas = distribuciones.get(clave) or []
+    if not filas:
+        return ""
+    lineas = [f"\n```mermaid\npie title Distribución por {_rotulo(clave)}"]
+    for fila in filas:
+        val = str(fila['valor']).replace('"', "'")
+        lineas.append(f'    "{val}" : {fila["cantidad"]}')
+    lineas.append("```\n")
+    return "\n".join(lineas)
+
+
 class ClienteSimulado:
     modo = "simulado"
 
@@ -164,6 +176,10 @@ class ClienteSimulado:
             tabla = _tabla_distribucion(clave, distribuciones)
             if tabla:
                 partes.append(tabla)
+                grafico = _grafico_mermaid_distribucion(clave, distribuciones)
+                if grafico:
+                    partes.append(grafico)
+
 
         indicadores = _seccion_indicadores(resumen)
         if indicadores:

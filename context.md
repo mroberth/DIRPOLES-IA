@@ -5,6 +5,10 @@
 > **Componente:** Microservicio de Analítica de Datos e Inteligencia Artificial (**DIRPOLES-IA**)  
 > **Institución:** Universidad Politécnica Territorial de Lara Andrés Eloy Blanco (UPTAEB) — PNF en Informática  
 
+> **Actualización (2026-10-08):** se corrigió la §6 (contratos API) para que
+> coincida con el microservicio implementado y probado. El contrato exacto para
+> la integración desde el monolito PHP está en **`INTEGRACION_DIRPOLES4.md`**.
+
 ---
 
 ## 1. INFORMACIÓN GENERAL Y PROPÓSITO DEL SISTEMA
@@ -56,7 +60,7 @@ El sistema **DIRPOLES-4** es un monolito desarrollado en PHP 8.3 diseñado para 
 ```
 
 ### 2.2. Flujo Paso a Paso
-1. **Invocación desde Monolito:** El usuario con permisos ingresa al módulo de reportes en PHP, selecciona los filtros deseados (rango de fechas, carrera, área) y la **intención del informe** (ej. Resumen Ejecutivo, Detección de Anomalías).
+1. **Invocación desde Monolito:** El usuario con permisos ingresa al módulo de reportes en PHP, selecciona los filtros deseados (rango de fechas, PNF, área, etc.) y la **intención del informe** (uno de 4 valores: `resumen_ejecutivo`, `alertas_y_anomalias`, `tendencias_y_patrones`, `recomendaciones`).
 2. **Petición B2B:** PHP realiza una petición cURL/Guzzle asíncrona hacia FastAPI pasando un payload JSON liviano con los parámetros de la consulta.
 3. **Extracción y Procesamiento Local:** Python recibe la petición, se conecta a la BD con un usuario `READ-ONLY`, ejecuta las consultas SQL correspondientes a los filtros y carga los datos crudos en un DataFrame de `Pandas`.
 4. **Transformación y Análisis:** Python calcula agrupaciones, porcentajes, variaciones y alertas.
@@ -107,13 +111,15 @@ dirpoles-ia/
 │   │   └── security.py          # Validación de Seguridad B2B (X-API-Key)
 │   ├── db/
 │   │   ├── session.py           # Conexión SQLAlchemy (Engine READ-ONLY)
-│   │   └── queries/             # Consultas SQL puras por módulo
+│   │   └── queries/             # Consultas SQL parametrizadas: 10 módulos
+│   │       ├── _comunes.py      # Helpers (fechas, limit, id_empleado)
+│   │       ├── general_queries.py
 │   │       ├── medicina_queries.py
 │   │       ├── psicologia_queries.py
-│   │       ├── trabajo_social_queries.py
-│   │       ├── transporte_queries.py
-│   │       └── general_queries.py
+│   │       └── ... (orientacion, discapacidad, trabajo_social,
+│   │                referencias, jornadas, mobiliario, transporte)
 │   ├── schemas/                 # DTOs Pydantic (Contratos de Petición y Respuesta)
+│   │   ├── enums.py             # Módulos, intenciones y catálogos
 │   │   ├── request.py           # ReporteRequestDTO
 │   │   └── response.py          # ReporteResponseDTO
 │   ├── services/
@@ -141,7 +147,7 @@ X-API-Key: <LLAVE_SECRETA_COMPARTIDA_EN_ENV>
 Si la cabecera es omitida o incorrecta, FastAPI responderá con código HTTP `401 Unauthorized`.
 
 ### 6.2. DTO de Entrada (`ReporteRequestDTO`)
-JSON que PHP envía al microservicio:
+JSON que PHP envía al microservicio (ejemplo real, ya probado):
 ```json
 {
   "modulo": "medicina",
@@ -149,12 +155,24 @@ JSON que PHP envía al microservicio:
   "filtros": {
     "fecha_inicio": "2026-01-01",
     "fecha_fin": "2026-09-30",
-    "carrera_id": 3,
-    "area_id": null
+    "genero": "F",
+    "pnf": 3,
+    "limit": 5000
   },
-  "observacion_usuario": "Enfocarse en insumos con bajo stock para las jornadas de octubre."
+  "observacion_usuario": "Enfocarse en insumos con bajo stock para las jornadas de octubre.",
+  "id_empleado": 17
 }
 ```
+
+* **`modulo`** (enum): `general`, `medicina`, `psicologia`, `orientacion`, `discapacidad`, `trabajo_social`, `referencias`, `jornadas`, `mobiliario`, `transporte`.
+* **`intencion`** (enum): `resumen_ejecutivo`, `alertas_y_anomalias`, `tendencias_y_patrones`, `recomendaciones`.
+* **`filtros`** (todos opcionales): `fecha_inicio`, `fecha_fin` (`YYYY-MM-DD`, inclusivos), `genero` (`M`/`F`), `pnf`, `area`, `estado`, `tipo_consulta`, `submodulo`, `grado`, `tipo_discapacidad`, `tipo_bien`, `tipo_vehiculo`, `seccion_transporte`, `servicio_destino`, `limit` (1–20000). Los filtros no aplicables al módulo se ignoran; los de `estado` se validan por catálogo en psicología, referencias, jornadas y mobiliario.
+* **`observacion_usuario`**: string opcional, máx. 1000 caracteres, se inyecta en el prompt.
+* **`id_empleado`**: opcional (≥ 1). Si se envía, limita los registros a los registrados por ese empleado (replica el `filtroEmpleado` del monolito; `null` = visibilidad total). PHP lo inyecta **server-side** desde la sesión.
+
+> Nota: los nombres de los filtros son los de la lista blanca real de
+> `reportesController.php` (`reportesAplicarFiltros()`). Las versiones previas
+> de este documento (`carrera_id`/`area_id`) estaban **obsoletas**.
 
 ### 6.3. DTO de Salida (`ReporteResponseDTO`)
 JSON que FastAPI responde a PHP:
@@ -163,13 +181,32 @@ JSON que FastAPI responde a PHP:
   "exito": true,
   "modulo": "medicina",
   "intencion": "alertas_y_anomalias",
-  "informe_markdown": "### 📊 Informe de Análisis Inteligente: Módulo Medicina\n\n**Periodo:** 01/01/2026 al 30/09/2026\n\n#### 1. Resumen Ejecutivo\nDurante el periodo analizado se registraron un total de **450 consultas médicas**...\n\n#### 2. Detección de Anomalías y Puntos Críticos\n* ⚠️ **Stock Crítico:** El insumo *Paracetamol 500mg* presenta solo 2 unidades disponibles.\n* 📈 **Incremento de Patologías:** Las afecciones respiratorias aumentaron un **35%** respecto al mes anterior.\n\n#### 3. Recomendaciones Operativas\n1. Priorizar la adquisición de analgésicos antes de las jornadas de octubre.\n...",
+  "informe_markdown": "### 📊 Informe de Análisis Inteligente: Módulo Medicina\n\n#### 1. Resumen Ejecutivo\nDurante el periodo analizado se registraron un total de **450 consultas médicas**...\n\n#### 2. Hallazgos Clave y Puntos Críticos\n* ⚠️ **Stock Crítico:** El insumo *Paracetamol 500mg* presenta solo 2 unidades disponibles.\n\n#### 3. Recomendaciones Operativas\n1. Priorizar la adquisición de analgésicos antes de las jornadas de octubre.\n...",
   "meta": {
     "registros_procesados": 450,
-    "tiempo_procesamiento_seg": 2.15
+    "tiempo_procesamiento_seg": 12.03,
+    "modo_informe": "gemini"
   }
 }
 ```
+
+`meta.modo_informe` indica quién redactó el texto: `gemini` (IA real),
+`simulado` (generador local sin conexión) o `simulado_fallback` (falló la IA y
+se usó el generador local como respaldo).
+
+### 6.4. Endpoints disponibles y códigos de error
+
+| Método | Ruta | Cabecera | Propósito |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/reportes/generar` | `X-API-Key` | Genera el informe (flujo principal) |
+| `GET` | `/api/v1/reportes/catalogos` | `X-API-Key` | Catálogos/valores válidos de los selects |
+| `GET` | `/api/v1/salud` | ninguna | Health check (disponibilidad) |
+
+| Código | Causa |
+| :--- | :--- |
+| `401` | `X-API-Key` ausente o incorrecta |
+| `422` | Payload inválido (módulo/intención desconocidos, fechas invertidas, `estado` fuera de catálogo…) |
+| `503` | Error de conexión o consulta a la base de datos |
 
 ---
 
@@ -273,8 +310,11 @@ DB_NAME_SECURITY=dirpoles_security
 
 # Proveedor de IA (Google AI Studio)
 GEMINI_API_KEY=AIzaSy...Tu_ApiKey_Google_AI_Studio
-GEMINI_MODEL=gemini-1.5-flash
+GEMINI_MODEL=gemini-3.5-flash
+# True (o key vacía) = generador simulado local; False = Gemini real con fallback automático
+MOCK_LLM=False
 ```
 
 ---
 *Este documento constituye la especificación oficial de arquitectura para el desarrollo y despliegue del microservicio `DIRPOLES-IA`.*
+*Para la integración concreta desde el monolito PHP (payloads exactos, RBAC, manejo de errores y código de ejemplo), ver **`INTEGRACION_DIRPOLES4.md`**.*
