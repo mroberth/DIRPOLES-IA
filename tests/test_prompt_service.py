@@ -14,7 +14,7 @@ def test_system_prompt_contiene_rol_y_regla_de_exclusividad() -> None:
     prompt = prompt_service.construir_system_prompt(Modulo.MEDICINA)
     assert "Especialista en gestión de servicios médicos universitarios" in prompt
     assert "EXCLUSIVAMENTE" in prompt
-    assert "Markdown" in prompt
+    assert "MARKDOWN" in prompt.upper()
 
 
 def test_user_prompt_estructura_completa() -> None:

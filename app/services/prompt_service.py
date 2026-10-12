@@ -70,13 +70,20 @@ def construir_system_prompt(modulo: Modulo) -> str:
     rol = ROLES_POR_MODULO[modulo]
     return (
         f"Eres un {rol} para la UPTAEB.\n"
-        "Tu objetivo es redactar un informe ejecutivo de alto nivel, altamente visual, estructurado y profesional basado "
-        "EXCLUSIVAMENTE en los datos estadísticos procesados suministrados por la capa analítica en Pandas.\n\n"
+        "Tu objetivo es redactar un informe ejecutivo de alto nivel, altamente visual, "
+        "estructurado y profesional basado EXCLUSIVAMENTE en los datos estadísticos "
+        "procesados suministrados por la capa analítica en Pandas.\n\n"
         "REGLAS OBLIGATORIAS DE FORMATO VISUAL:\n"
         "1. Estructura el informe con encabezados claros (### y ####).\n"
-        "2. NUNCA presentes distribuciones o métricas comparativas como simples listas de texto: OBLIGATORIAMENTE debes incluir TABLAS MARKDOWN bien formateadas (`| Categoría | Cantidad | Porcentaje (%) |`).\n"
-        "3. DEBES INCLUIR AL MENOS UN GRÁFICO VISUAL MERMAID.JS (usando el bloque ```mermaid ... ``` con 'pie title ...' para gráficos de pastel o 'xychart-beta' para gráficos de barras) representando la distribución de datos más importante.\n"
-        "4. Usa bloques de cita (> ⚠️ **Punto Crítico:** ...) para resaltar alertas u observaciones que requieran atención inmediata.\n"
+        "2. NUNCA presentes distribuciones o métricas comparativas como simples listas de texto: "
+        "OBLIGATORIAMENTE debes incluir TABLAS MARKDOWN bien formateadas "
+        "(`| Categoría | Cantidad | Porcentaje (%) |`).\n"
+        "3. DEBES INCLUIR AL MENOS UN GRÁFICO VISUAL MERMAID.JS "
+        "(usando el bloque ```mermaid ... ``` con 'pie title ...' para gráficos de pastel o "
+        "'xychart-beta' para gráficos de barras) "
+        "representando la distribución de datos más importante.\n"
+        "4. Usa bloques de cita (> ⚠️ **Punto Crítico:** ...) para resaltar alertas u "
+        "observaciones que requieran atención inmediata.\n"
         "5. No inventes cifras: cíñete estrictamente a los datos recibidos."
     )
 
@@ -109,8 +116,10 @@ def construir_user_prompt(
         f"{observacion}\n\n"
         "REQUISITOS OBLIGATORIOS DE ESTRUCTURA Y FORMATO VISUAL:\n"
         "1. Resumen Ejecutivo (Visión general con métricas destacadas y tabla resumen).\n"
-        "2. Hallazgos Clave y Puntos Críticos (Incluye tablas de distribución, citas de alertas > ⚠️ y AL MENOS UN GRÁFICO VISUAL ```mermaid pie o xychart-beta).\n"
-        "3. Recomendaciones Operativas para la Toma de Decisiones (Lista numerada priorizada y concreta)."
+        "2. Hallazgos Clave y Puntos Críticos (Incluye tablas de distribución, citas de alertas "
+        "> ⚠️ y AL MENOS UN GRÁFICO VISUAL ```mermaid pie o xychart-beta).\n"
+        "3. Recomendaciones Operativas para la Toma de Decisiones (Lista numerada priorizada "
+        "y concreta)."
     )
 
 
