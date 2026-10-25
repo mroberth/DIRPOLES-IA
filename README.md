@@ -39,7 +39,7 @@ El microservicio se encarga de:
 5. **Garantizar resiliencia total**: ante caídas de red o ausencia de credenciales de IA, conmuta automáticamente a un generador simulado determinista local sin interrumpir la operación del sistema.
 
 > [!NOTE]
-> Para consultar la especificación técnica profunda de arquitectura consulta [`context.md`](./context.md). Para la guía de consumo desde el monolito PHP revisa [`INTEGRACION_DIRPOLES4.md`](./INTEGRACION_DIRPOLES4.md). Para la guía operativa del servidor consulta [`MANUAL.md`](./MANUAL.md).
+> Para consultar la especificación técnica profunda de arquitectura consulta [`context.md`](./context.md) y [`AGENTS.md`](./AGENTS.md). Para los pipelines analíticos exhaustivos revisa [`docs/PIPELINES_IA.md`](./docs/PIPELINES_IA.md). Para la guía de consumo desde el monolito PHP revisa [`INTEGRACION_DIRPOLES4.md`](./INTEGRACION_DIRPOLES4.md). Para la guía operativa del servidor y defensa técnica consulta [`MANUAL.md`](./MANUAL.md) y [`DOCUMENTACION_DIRPOLES_IA.md`](./DOCUMENTACION_DIRPOLES_IA.md).
 
 ---
 
@@ -284,17 +284,67 @@ El microservicio admite dos modos operativos:
 
 ### Paso 6: Puesta en Marcha del Microservicio
 
-Con el entorno virtual activo y el archivo `.env` listo, levanta el servidor Uvicorn:
+Con el entorno virtual activo y el archivo `.env` configurado, puedes levantar el microservicio eligiendo la modalidad más conveniente:
 
-#### Opción A: Modo Desarrollo Interactivo (con Recarga en Caliente)
-Ideal para desarrollo activo. El servidor se recarga automáticamente ante cualquier cambio de código:
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        MODALIDADES DE EJECUCIÓN                        │
+├────────────────────────────────────────────────────────────────────────┤
+│ 1. Scripts Rápidos (.sh) → Segundo plano fácil (Linux / WSL / macOS).  │
+│ 2. Modo Interactivo      → Consola en vivo con recarga (Multiplataforma)│
+│ 3. Servicio Systemd      → Autoarranque en servidor de producción.     │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
+#### Opción A: Scripts de Control Rápido en Segundo Plano (Recomendado en Linux / WSL)
+
+El proyecto incluye 4 scripts automatizados en la raíz para simplificar la gestión diaria del microservicio:
+
+| Script | Comando | Descripción |
+| :--- | :--- | :--- |
+| **Encender** | `./iniciar.sh` | Valida el entorno virtual `.venv`, arranca Uvicorn en segundo plano (`127.0.0.1:8000`), guarda el PID en `logs/uvicorn.pid` y verifica la disponibilidad del servicio. |
+| **Consultar Estado** | `./estado.sh` | Informa si el proceso está activo en memoria y consulta en vivo el endpoint de diagnóstico `/api/v1/salud`. |
+| **Ver Logs en Vivo** | `./logs.sh` | Muestra el flujo continuo de peticiones y trazas HTTP. Presionar `Ctrl + C` sale del visor **sin apagar el microservicio**. |
+| **Detener** | `./detener.sh` | Detiene limpiamente el proceso Uvicorn mediante su PID y limpia los archivos temporales. |
+
+```bash
+# Ejemplo de uso diario:
+./iniciar.sh
+./estado.sh
+./logs.sh
+./detener.sh
+```
+
+> [!NOTE]
+> **Compatibilidad de los scripts `.sh` (Linux vs Windows):**  
+> Los archivos `.sh` son scripts Bash diseñados para sistemas POSIX (Linux, macOS y entornos **WSL2** en Windows). Hacen uso de utilidades nativas como `nohup`, señales POSIX (`kill`), `pgrep`, `tail -f` y la ruta de ejecutables `.venv/bin/uvicorn`.  
+> * **En Windows nativo (CMD / PowerShell):** Los scripts `.sh` no se ejecutan directamente. Para Windows, se recomienda utilizar **WSL2** (donde funcionan al 100%) o utilizar el comando interactivo de la **Opción B**.
+
+---
+
+#### Opción B: Modo Desarrollo Interactivo con Recarga en Caliente (Multiplataforma)
+
+Ideal para desarrollo activo en cualquier sistema operativo. Muestra todas las salidas en pantalla y recarga el servidor automáticamente al editar código:
+
+**En Linux / macOS:**
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-#### Opción B: Modo Proceso en Segundo Plano (Recomendado para uso continuo local)
-Ejecuta el servidor desacoplado de la terminal actual y canaliza las salidas a un log:
+**En Windows (PowerShell):**
+```powershell
+# 1. Activar el entorno virtual en Windows
+.\.venv\Scripts\Activate.ps1
+
+# 2. Iniciar Uvicorn con recarga automática
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+---
+
+#### Opción C: Modo Manual en Segundo Plano (Linux / Servidor)
+
+Si prefieres gestionar el proceso manualmente sin usar los scripts:
 
 ```bash
 # 1. Asegurar la carpeta de logs
@@ -547,6 +597,8 @@ DIRPOLES-IA/
 │       ├── etl_service.py          # Extracción SQL y transformaciones analíticas con Pandas
 │       ├── prompt_service.py       # Roles analíticos de 10 dominios y sintaxis Mermaid
 │       └── gemini_service.py       # Cliente Google GenAI y fallback simulado local
+├── docs/                           # Documentación satélite de dominio y reglas analíticas
+│   └── PIPELINES_IA.md             # Especificación profunda de los 10 pipelines analíticos
 ├── tests/                          # Suite de pruebas automatizadas
 │   ├── conftest.py                 # Fixtures de Pytest y configuración
 │   ├── test_api_contrato.py        # Pruebas de contrato y códigos de error HTTP
@@ -557,13 +609,19 @@ DIRPOLES-IA/
 │   ├── test_prompt_service.py      # Validación de roles y ensamblado de prompts
 │   └── test_schemas.py             # Pruebas de validación de esquemas Pydantic
 ├── logs/                           # Registro de eventos y PID del servidor
+├── iniciar.sh                      # Script de arranque en segundo plano con validación de entorno
+├── estado.sh                       # Script de diagnóstico de proceso y endpoint de salud
+├── logs.sh                         # Visor de trazas y peticiones en tiempo real (tail -f)
+├── detener.sh                      # Script de apagado limpio del proceso Uvicorn
+├── AGENTS.md                       # Constitución técnica y reglas inmutables para agentes IA (<20 KB)
+├── DOCUMENTACION_DIRPOLES_IA.md    # Guía técnica, defensa ante jurados y arquitectura del Mock
+├── INTEGRACION_DIRPOLES4.md        # Contrato de integración técnica para el monolito PHP
+├── MANUAL.md                       # Manual de arranque y servicio systemd para autoarranque
+├── context.md                      # Especificación arquitectónica y contexto integral
 ├── .env.example                    # Plantilla de variables de entorno
 ├── requirements.txt                # Dependencias base para producción
 ├── requirements-dev.txt            # Dependencias adicionales para desarrollo y pruebas
 ├── pyproject.toml                  # Configuración unificada de Ruff, Mypy y Pytest
-├── context.md                      # Especificación arquitectónica y contexto integral
-├── INTEGRACION_DIRPOLES4.md        # Contrato de integración técnica para PHP
-├── MANUAL.md                       # Manual de arranque y servicio systemd
 └── README.md                       # Documentación principal del repositorio
 ```
 
@@ -619,9 +677,12 @@ DIRPOLES-IA/
 
 ## 📚 Documentación Adicional
 
+* 📜 **[Constitución Técnica para Agentes de IA (`AGENTS.md`)](./AGENTS.md):** Reglas inmutables de arquitectura, contratos B2B y anti-patrones para asistentes de codificación (<20 KB).
+* 🔬 **[Especificación de Pipelines de Analítica e IA (`docs/PIPELINES_IA.md`)](./docs/PIPELINES_IA.md):** Documento satélite con el mapeo detallado de consultas SQL, ETL en Pandas, roles de prompt y umbrales por módulo.
 * 🏛️ **[Arquitectura y Especificación Técnica (`context.md`)](./context.md):** Especificación funcional detallada, modelo de datos relacional y fundamentación del proyecto.
 * 🔌 **[Guía de Integración PHP (`INTEGRACION_DIRPOLES4.md`)](./INTEGRACION_DIRPOLES4.md):** Manual completo con contratos JSON, DTOs y snippets para los desarrolladores del monolito.
-* 🖥️ **[Manual de Arranque Local y Systemd (`MANUAL.md`)](./MANUAL.md):** Comandos rápidos de arranque, apagado, lectura de logs y configuración de servicio para autoarranque.
+* 🎓 **[Documentación Técnica y Defensa ante Jurados (`DOCUMENTACION_DIRPOLES_IA.md`)](./DOCUMENTACION_DIRPOLES_IA.md):** Guía de arquitectura, funcionamiento a fondo del motor simulado y preguntas frecuentes de evaluación.
+* 🖥️ **[Manual de Arranque Local y Systemd (`MANUAL.md`)](./MANUAL.md):** Guía de scripts rápidos (`iniciar.sh`, `estado.sh`, etc.) y configuración de servicio systemd para autoarranque.
 
 ---
 
