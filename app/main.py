@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.endpoints import reportes
+from app.api.v2.endpoints import analisis
 from app.core.config import obtener_ajustes
 from app.db import session
 
@@ -35,6 +36,7 @@ def crear_app() -> FastAPI:
         expose_headers=["*"],
     )
     app.include_router(reportes.router)
+    app.include_router(analisis.router)
 
     @app.get("/api/v1/salud", tags=["salud"])
     def salud() -> dict[str, object]:

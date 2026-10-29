@@ -8,6 +8,7 @@ __pycache__/
 .coverage
 htmlcov/
 .env
+.env.test
 *.log
 logs/
 .agents

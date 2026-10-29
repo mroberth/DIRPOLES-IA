@@ -39,7 +39,7 @@ El microservicio se encarga de:
 5. **Garantizar resiliencia total**: ante caídas de red o ausencia de credenciales de IA, conmuta automáticamente a un generador simulado determinista local sin interrumpir la operación del sistema.
 
 > [!NOTE]
-> Para consultar la especificación técnica profunda de arquitectura consulta [`context.md`](./context.md) y [`AGENTS.md`](./AGENTS.md). Para los pipelines analíticos exhaustivos revisa [`docs/PIPELINES_IA.md`](./docs/PIPELINES_IA.md). Para la guía de consumo desde el monolito PHP revisa [`INTEGRACION_DIRPOLES4.md`](./INTEGRACION_DIRPOLES4.md). Para la guía operativa del servidor y defensa técnica consulta [`MANUAL.md`](./MANUAL.md) y [`DOCUMENTACION_DIRPOLES_IA.md`](./DOCUMENTACION_DIRPOLES_IA.md).
+> Para consultar la especificación técnica profunda de arquitectura consulta [`AGENTS.md`](./AGENTS.md). Para los pipelines analíticos exhaustivos revisa [`docs/PIPELINES_IA.md`](./docs/PIPELINES_IA.md). Para la guía de consumo desde el monolito PHP revisa [`docs/INTEGRACION_DIRPOLES4.md`](./docs/INTEGRACION_DIRPOLES4.md). Para la guía operativa del servidor consulta [`docs/MANUAL.md`](./docs/MANUAL.md), para la guía conceptual [`docs/Documentacion_componenteIA.md`](./docs/Documentacion_componenteIA.md) y para la entrega formal de grado revisa [`docs/ENTREGA_FASE_II_COMPONENTE_IA.md`](./docs/ENTREGA_FASE_II_COMPONENTE_IA.md).
 
 ---
 
@@ -361,7 +361,7 @@ echo $! > logs/uvicorn.pid
 * Para detener el proceso: `kill "$(cat logs/uvicorn.pid)"`
 
 > [!TIP]
-> Si deseas configurar el microservicio como un demonio que autoarranque con el sistema operativo mediante **systemd**, consulta la sección dedicada en [`MANUAL.md`](./MANUAL.md#7-opcional-autoarranque-con-systemd--que-encienda-solo).
+> Si deseas configurar el microservicio como un demonio que autoarranque con el sistema operativo mediante **systemd**, consulta la sección dedicada en [`docs/MANUAL.md`](./docs/MANUAL.md#7-opcional-autoarranque-con-systemd--que-encienda-solo).
 
 ---
 
@@ -614,10 +614,15 @@ DIRPOLES-IA/
 ├── logs.sh                         # Visor de trazas y peticiones en tiempo real (tail -f)
 ├── detener.sh                      # Script de apagado limpio del proceso Uvicorn
 ├── AGENTS.md                       # Constitución técnica y reglas inmutables para agentes IA (<20 KB)
-├── DOCUMENTACION_DIRPOLES_IA.md    # Guía técnica, defensa ante jurados y arquitectura del Mock
-├── INTEGRACION_DIRPOLES4.md        # Contrato de integración técnica para el monolito PHP
-├── MANUAL.md                       # Manual de arranque y servicio systemd para autoarranque
-├── context.md                      # Especificación arquitectónica y contexto integral
+├── docs/                           # Documentación satélite, guías y entregas de grado
+│   ├── AUDITORIA_ANTIGRAVITY.md    # Auditoría inicial y plan director
+│   ├── Documentacion_componenteIA.md # Guía conceptual del microservicio
+│   ├── ENTREGA_FASE_II_COMPONENTE_IA.md # Documento formal de entrega académica (PST IV)
+│   ├── INTEGRACION_DIRPOLES4.md    # Contrato de integración técnica para el monolito PHP
+│   ├── MANUAL.md                   # Manual de arranque y servicio systemd para autoarranque
+│   └── PIPELINES_IA.md             # Especificación detallada de consultas y ETL
+├── database/                       # Esquemas y semillas de la Base de Conocimiento (MariaDB)
+├── config/                         # Perfiles de consumidores multitenant (JSON)
 ├── .env.example                    # Plantilla de variables de entorno
 ├── requirements.txt                # Dependencias base para producción
 ├── requirements-dev.txt            # Dependencias adicionales para desarrollo y pruebas
@@ -678,11 +683,11 @@ DIRPOLES-IA/
 ## 📚 Documentación Adicional
 
 * 📜 **[Constitución Técnica para Agentes de IA (`AGENTS.md`)](./AGENTS.md):** Reglas inmutables de arquitectura, contratos B2B y anti-patrones para asistentes de codificación (<20 KB).
-* 🔬 **[Especificación de Pipelines de Analítica e IA (`docs/PIPELINES_IA.md`)](./docs/PIPELINES_IA.md):** Documento satélite con el mapeo detallado de consultas SQL, ETL en Pandas, roles de prompt y umbrales por módulo.
-* 🏛️ **[Arquitectura y Especificación Técnica (`context.md`)](./context.md):** Especificación funcional detallada, modelo de datos relacional y fundamentación del proyecto.
-* 🔌 **[Guía de Integración PHP (`INTEGRACION_DIRPOLES4.md`)](./INTEGRACION_DIRPOLES4.md):** Manual completo con contratos JSON, DTOs y snippets para los desarrolladores del monolito.
-* 🎓 **[Documentación Técnica y Defensa ante Jurados (`DOCUMENTACION_DIRPOLES_IA.md`)](./DOCUMENTACION_DIRPOLES_IA.md):** Guía de arquitectura, funcionamiento a fondo del motor simulado y preguntas frecuentes de evaluación.
-* 🖥️ **[Manual de Arranque Local y Systemd (`MANUAL.md`)](./MANUAL.md):** Guía de scripts rápidos (`iniciar.sh`, `estado.sh`, etc.) y configuración de servicio systemd para autoarranque.
+* 🎓 **[Documento Formal de Entrega - Fase II (`docs/ENTREGA_FASE_II_COMPONENTE_IA.md`)](./docs/ENTREGA_FASE_II_COMPONENTE_IA.md):** Informe académico exhaustivo para la evaluación universitaria en la UPTAEB.
+* 💡 **[Guía Conceptual del Microservicio (`docs/Documentacion_componenteIA.md`)](./docs/Documentacion_componenteIA.md):** Explicación didáctica sobre LLMs, Pandas, arquitectura y justificación de ingeniería.
+* 🔬 **[Especificación de Pipelines de Analítica e IA (`docs/PIPELINES_IA.md`)](./docs/PIPELINES_IA.md):** Mapeo detallado de consultas SQL, ETL en Pandas, roles de prompt y umbrales por módulo.
+* 🔌 **[Guía de Integración PHP (`docs/INTEGRACION_DIRPOLES4.md`)](./docs/INTEGRACION_DIRPOLES4.md):** Manual completo con contratos JSON, DTOs y snippets para los desarrolladores del monolito.
+* 🖥️ **[Manual de Operación y Scripts (`docs/MANUAL.md`)](./docs/MANUAL.md):** Guía de scripts rápidos (`iniciar.sh`, `estado.sh`, etc.) y configuración de servicio systemd.
 
 ---
 

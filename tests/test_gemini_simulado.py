@@ -1,4 +1,6 @@
-import pytest
+import unittest
+from unittest.mock import patch
+
 from app.core.config import obtener_ajustes
 from app.schemas.enums import Intencion, Modulo
 from app.services import gemini_service, prompt_service
@@ -29,53 +31,51 @@ def _contexto() -> dict[str, object]:
     }
 
 
-def test_simulado_genera_las_tres_secciones() -> None:
-    cliente = gemini_service.ClienteSimulado()
-    informe = cliente.generar_informe("sys", "user", _contexto())
-    assert "#### 1. Resumen Ejecutivo" in informe
-    assert "#### 2. Hallazgos Clave y Puntos Críticos" in informe
-    assert "#### 3. Recomendaciones Operativas" in informe
+class TestGeminiSimulado(unittest.TestCase):
+    def test_simulado_genera_las_tres_secciones(self) -> None:
+        cliente = gemini_service.ClienteSimulado()
+        informe = cliente.generar_informe("sys", "user", _contexto())
+        self.assertIn("#### 1. Resumen Ejecutivo", informe)
+        self.assertIn("#### 2. Hallazgos Clave y Puntos Críticos", informe)
+        self.assertIn("#### 3. Recomendaciones Operativas", informe)
+
+    def test_simulado_incorpora_cifras_y_alertas(self) -> None:
+        cliente = gemini_service.ClienteSimulado()
+        informe = cliente.generar_informe("sys", "user", _contexto())
+        self.assertTrue("**450**" in informe or "450" in informe)
+        self.assertIn("2 insumos vencidos.", informe)
+        self.assertIn("57.8%", informe)
+        self.assertIn("modo simulado", informe)
+
+    def test_simulado_sin_alertas_mensaje_adecuado(self) -> None:
+        contexto = _contexto()
+        contexto["resumen"]["alertas"] = []  # type: ignore[index]
+        informe = gemini_service.ClienteSimulado().generar_informe("sys", "user", contexto)
+        self.assertIn("No se detectaron anomalías críticas", informe)
+        self.assertIn("Mantener el ritmo operativo actual", informe)
+
+    def test_obtener_cliente_devuelve_simulado_sin_key(self) -> None:
+        ajustes = obtener_ajustes()
+        with patch.object(ajustes, "mock_llm", True), patch.object(ajustes, "gemini_api_key", ""):
+            self.assertEqual(gemini_service.obtener_cliente().modo, "simulado")
+
+    def test_obtener_cliente_devuelve_gemini_con_key(self) -> None:
+        ajustes = obtener_ajustes()
+        with patch.object(ajustes, "mock_llm", False), patch.object(ajustes, "gemini_api_key", "AIzaSimuladaParaPrueba"):
+            cliente = gemini_service.obtener_cliente()
+            self.assertEqual(cliente.modo, "gemini")
+
+    def test_flujo_completo_prompt_simulado(self) -> None:
+        contexto = _contexto()
+        system, user = prompt_service.construir_prompts(
+            modulo=Modulo.MEDICINA,
+            intencion=Intencion.ALERTAS_Y_ANOMALIAS,
+            resumen=contexto["resumen"],  # type: ignore[arg-type]
+            observacion_usuario=None,
+        )
+        informe = gemini_service.ClienteSimulado().generar_informe(system, user, contexto)
+        self.assertTrue(informe.startswith("### 📊 Informe de Análisis Inteligente: Módulo Medicina"))
 
 
-def test_simulado_incorpora_cifras_y_alertas() -> None:
-    cliente = gemini_service.ClienteSimulado()
-    informe = cliente.generar_informe("sys", "user", _contexto())
-    assert "**450**" in informe or "450" in informe
-    assert "2 insumos vencidos." in informe
-    assert "57.8%" in informe
-    assert "modo simulado" in informe
-
-
-def test_simulado_sin_alertas_mensaje_adecuado() -> None:
-    contexto = _contexto()
-    contexto["resumen"]["alertas"] = []  # type: ignore[index]
-    informe = gemini_service.ClienteSimulado().generar_informe("sys", "user", contexto)
-    assert "No se detectaron anomalías críticas" in informe
-    assert "Mantener el ritmo operativo actual" in informe
-
-
-def test_obtener_cliente_devuelve_simulado_sin_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    ajustes = obtener_ajustes()
-    monkeypatch.setattr(ajustes, "mock_llm", True)
-    monkeypatch.setattr(ajustes, "gemini_api_key", "")
-    assert gemini_service.obtener_cliente().modo == "simulado"
-
-
-def test_obtener_cliente_devuelve_gemini_con_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    ajustes = obtener_ajustes()
-    monkeypatch.setattr(ajustes, "mock_llm", False)
-    monkeypatch.setattr(ajustes, "gemini_api_key", "AIzaSimuladaParaPrueba")
-    cliente = gemini_service.obtener_cliente()
-    assert cliente.modo == "gemini"
-
-
-def test_flujo_completo_prompt_simulado() -> None:
-    contexto = _contexto()
-    system, user = prompt_service.construir_prompts(
-        modulo=Modulo.MEDICINA,
-        intencion=Intencion.ALERTAS_Y_ANOMALIAS,
-        resumen=contexto["resumen"],  # type: ignore[arg-type]
-        observacion_usuario=None,
-    )
-    informe = gemini_service.ClienteSimulado().generar_informe(system, user, contexto)
-    assert informe.startswith("### 📊 Informe de Análisis Inteligente: Módulo Medicina")
+if __name__ == "__main__":
+    unittest.main()
