@@ -96,11 +96,13 @@ def _seccion_indicadores(resumen: dict[str, Any]) -> str:
     lineas = []
 
     def _volcar(prefijo: str, valor: Any) -> None:
+        if valor is None:
+            return
         if isinstance(valor, list):
             return
         if isinstance(valor, dict):
             for subclave, subvalor in valor.items():
-                if isinstance(subvalor, (dict, list)):
+                if subvalor is None or isinstance(subvalor, (dict, list)):
                     continue
                 lineas.append(f"* **{_rotulo(prefijo + ' ' + subclave)}:** {subvalor}")
             return

@@ -3,6 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.core.consumers import PerfilConsumidor
 from app.core.security import validar_api_key
 from app.schemas.enums import (
     AreaGeneral,
@@ -30,7 +31,7 @@ router = APIRouter(prefix="/api/v1/reportes", tags=["reportes"])
 @router.post("/generar", response_model=ReporteResponseDTO)
 def generar_reporte(
     peticion: ReporteRequestDTO,
-    _api_key: Annotated[str, Depends(validar_api_key)],
+    _api_key: Annotated[PerfilConsumidor, Depends(validar_api_key)],
 ) -> ReporteResponseDTO:
     inicio = time.perf_counter()
     try:
@@ -49,14 +50,15 @@ def generar_reporte(
             },
         ) from exc
 
+    contexto_seguro = prompt_service.filtrar_contexto_seguro(resumen)
     system_prompt, user_prompt = prompt_service.construir_prompts(
         modulo=peticion.modulo,
         intencion=peticion.intencion,
-        resumen=resumen,
+        resumen=contexto_seguro,
         observacion_usuario=peticion.observacion_usuario,
     )
     contexto = {
-        "resumen": resumen,
+        "resumen": contexto_seguro,
         "intencion": peticion.intencion.value,
         "modulo": peticion.modulo.value,
     }
@@ -86,7 +88,7 @@ def generar_reporte(
 
 @router.get("/catalogos")
 def catalogos(
-    _api_key: Annotated[str, Depends(validar_api_key)],
+    _api_key: Annotated[PerfilConsumidor, Depends(validar_api_key)],
 ) -> dict[str, list[str]]:
     return {
         "modulos": [valor.value for valor in Modulo],

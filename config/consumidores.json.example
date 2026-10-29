@@ -1,0 +1,29 @@
+[
+  {
+    "id": "dirpoles4",
+    "nombre": "DIRPOLES-4 Monolito Institucional (UPTAEB)",
+    "api_key": "clave-dirpoles4-monolito",
+    "modo_acceso": "sql_pull",
+    "conocimiento_id": "dirpoles4",
+    "adaptador_id": "dirpoles4_sql",
+    "activo": true
+  },
+  {
+    "id": "consumidor_logistica",
+    "nombre": "Sistema de Gestión de Transporte y Logística",
+    "api_key": "clave-logistica-push-2026",
+    "modo_acceso": "push",
+    "conocimiento_id": "dirpoles4",
+    "adaptador_id": "en_memoria",
+    "activo": true
+  },
+  {
+    "id": "consumidor_salud",
+    "nombre": "Red de Salud y Asistencia Médica Externa",
+    "api_key": "clave-salud-externa-2026",
+    "modo_acceso": "push",
+    "conocimiento_id": "dirpoles4",
+    "adaptador_id": "en_memoria",
+    "activo": true
+  }
+]

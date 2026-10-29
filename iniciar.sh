@@ -38,6 +38,7 @@ fi
 echo "🚀 Iniciando DIRPOLES-IA en segundo plano..."
 nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 > logs/uvicorn.log 2>&1 &
 PID=$!
+disown $PID 2>/dev/null || true
 echo $PID > logs/uvicorn.pid
 
 # 4. Esperar y comprobar

@@ -1,21 +1,17 @@
-from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
 import pandas as pd
 
+from app.adapters.base import AdaptadorFuenteDatos, Extraccion
+from app.adapters.dirpoles4 import AdaptadorDirpoles4SQL
 from app.core.config import obtener_ajustes
-from app.db import queries, session
 from app.schemas.enums import Modulo
 from app.schemas.request import FiltrosDTO
 
 Resumen = dict[str, Any]
 
-
-@dataclass
-class Extraccion:
-    datos: dict[str, pd.DataFrame]
-    totales: dict[str, int]
+_ADAPTADOR_DEFAULT: AdaptadorFuenteDatos = AdaptadorDirpoles4SQL()
 
 
 def extraer(
@@ -23,16 +19,10 @@ def extraer(
     filtros: FiltrosDTO,
     id_empleado: int | None,
     limit: int,
+    adaptador: AdaptadorFuenteDatos | None = None,
 ) -> Extraccion:
-    consultas = queries.obtener_consultas(modulo, filtros, id_empleado)
-    datos: dict[str, pd.DataFrame] = {}
-    totales: dict[str, int] = {}
-    for nombre, consulta in consultas.items():
-        sql_filas, params_filas = queries.sql_con_limit(consulta, limit)
-        datos[nombre] = session.consultar_dataframe(sql_filas, params_filas)
-        sql_total, params_total = queries.sql_total(consulta)
-        totales[nombre] = session.contar(sql_total, params_total)
-    return Extraccion(datos=datos, totales=totales)
+    fuente = adaptador or _ADAPTADOR_DEFAULT
+    return fuente.extraer(modulo, filtros, id_empleado, limit)
 
 
 def _porcentaje(cantidad: int, total: int) -> float:
@@ -134,22 +124,6 @@ def _dias_hasta(vencimiento: Any) -> int | None:
     return int((fecha.date() - date.today()).days)
 
 
-def _muestra(df: pd.DataFrame, columnas: list[str], cantidad: int = 5) -> list[dict[str, Any]]:
-    if df.empty:
-        return []
-    presentes = [col for col in columnas if col in df.columns]
-    if not presentes:
-        presentes = list(df.columns)[:6]
-    muestra = df[presentes].head(cantidad).copy()
-    for col in presentes:
-        if pd.api.types.is_datetime64_any_dtype(muestra[col]):
-            muestra[col] = muestra[col].dt.strftime("%Y-%m-%d")
-    return [
-        {str(clave): (None if pd.isna(valor) else str(valor)) for clave, valor in fila.items()}
-        for fila in muestra.to_dict(orient="records")
-    ]
-
-
 def _montos_truncados(extraccion: Extraccion, alertas: list[dict[str, str]]) -> None:
     for nombre, total in extraccion.totales.items():
         obtenidos = len(extraccion.datos.get(nombre, []))
@@ -190,16 +164,11 @@ def _insumos_alertas(insumos: pd.DataFrame, alertas: list[dict[str, str]]) -> di
             _alerta("advertencia", f"{por_vencer} insumo(s) vencen en los próximos 30 días.")
         )
     if len(critico):
-        nombres = (
-            ", ".join(str(n) for n in critico["nombre_insumo"].head(5))
-            if "nombre_insumo" in critico
-            else ""
-        )
         alertas.append(
             _alerta(
                 "critico",
                 f"{len(critico)} insumo(s) por debajo del umbral crítico "
-                f"({ajustes.umbral_stock_critico_insumos} unidades): {nombres}.",
+                f"({ajustes.umbral_stock_critico_insumos} unidades).",
             )
         )
     return {
@@ -231,7 +200,7 @@ def _transformar_general(extraccion: Extraccion, filtros: FiltrosDTO, alertas: l
                 )
             )
     serie = _serie_mensual(df, "fecha")
-    top = _top_concentracion(df, "diagnostico") if "diagnostico" in df.columns else []
+    top = _top_concentracion(df, "area") if "area" in df.columns else []
     return {
         "totales": extraccion.totales,
         "distribuciones": {
@@ -242,7 +211,6 @@ def _transformar_general(extraccion: Extraccion, filtros: FiltrosDTO, alertas: l
         "comparativa": _comparativa(serie),
         "serie_mensual": serie,
         "top_areas_concentracion": top,
-        "ejemplos": _muestra(df, ["fecha", "nombres", "apellidos", "area", "nombre_pnf"]),
     }
 
 
@@ -266,14 +234,11 @@ def _transformar_medicina(extraccion: Extraccion, filtros: FiltrosDTO, alertas: 
         "distribuciones": {
             "por_genero": _distribucion(consultas, "genero", {"M": "Masculino", "F": "Femenino"}),
             "por_pnf": _distribucion(consultas, "nombre_pnf", limite=8),
-            "top_diagnosticos": _distribucion(consultas, "diagnostico", limite=8),
-            "top_motivos": _distribucion(consultas, "motivo", limite=8),
             "insumos_por_estatus": _distribucion(insumos, "estatus"),
         },
         "comparativa": comp,
         "serie_mensual": serie,
         "indicadores": {"insumos": indicadores_insumos},
-        "ejemplos": _muestra(consultas, ["fecha", "nombres", "apellidos", "motivo", "diagnostico"]),
     }
 
 
@@ -301,8 +266,8 @@ def _transformar_psicologia(extraccion: Extraccion, filtros: FiltrosDTO, alertas
         alertas.append(
             _alerta(
                 "advertencia",
-                f"El diagnóstico '{top[0]['valor']}' representa el {top[0]['porcentaje']}% "
-                "de la morbilidad psicológica.",
+                f"Una condición diagnóstica concentra el {top[0]['porcentaje']}% "
+                "de la morbilidad psicológica del periodo.",
             )
         )
     serie = _serie_mensual(morbilidad, "fecha")
@@ -310,7 +275,6 @@ def _transformar_psicologia(extraccion: Extraccion, filtros: FiltrosDTO, alertas
         "totales": extraccion.totales,
         "distribuciones": {
             "morbilidad_por_tipo_consulta": _distribucion(morbilidad, "tipo_consulta"),
-            "top_diagnosticos": _distribucion(morbilidad, "diagnostico", limite=8),
             "por_pnf": _distribucion(morbilidad, "nombre_pnf", limite=8),
             "citas_por_estado": por_estado,
         },
@@ -324,9 +288,6 @@ def _transformar_psicologia(extraccion: Extraccion, filtros: FiltrosDTO, alertas
                 total_citas,
             ),
         },
-        "ejemplos": _muestra(
-            morbilidad, ["fecha", "nombres", "apellidos", "tipo_consulta", "diagnostico"]
-        ),
     }
 
 
@@ -339,11 +300,9 @@ def _transformar_orientacion(extraccion: Extraccion, filtros: FiltrosDTO, alerta
         "distribuciones": {
             "por_genero": _distribucion(df, "genero", {"M": "Masculino", "F": "Femenino"}),
             "por_pnf": _distribucion(df, "nombre_pnf", limite=8),
-            "top_motivos": _distribucion(df, "motivo_consulta", limite=8),
         },
         "comparativa": _comparativa(serie),
         "serie_mensual": serie,
-        "ejemplos": _muestra(df, ["fecha", "nombres", "apellidos", "motivo_consulta"]),
     }
 
 
@@ -363,7 +322,6 @@ def _transformar_trabajo_social(
         },
         "comparativa": _comparativa(serie),
         "serie_mensual": serie,
-        "ejemplos": _muestra(df, ["fecha", "submodulo", "nombres", "apellidos", "detalle_extra"]),
     }
 
 
@@ -416,7 +374,6 @@ def _transformar_discapacidad(
             "requiere_asistencia": con_asistencia,
             "grado_grave": graves,
         },
-        "ejemplos": _muestra(df, ["fecha", "nombres", "apellidos", "tipo_discapacidad", "grado"]),
     }
 
 
@@ -444,10 +401,6 @@ def _transformar_referencias(extraccion: Extraccion, filtros: FiltrosDTO, alerta
         "comparativa": _comparativa(serie),
         "serie_mensual": serie,
         "indicadores": {"pendientes": pendientes},
-        "ejemplos": _muestra(
-            df,
-            ["fecha", "nombres_benef", "apellidos_benef", "servicio_destino", "estado", "motivo"],
-        ),
     }
 
 
@@ -510,17 +463,6 @@ def _transformar_jornadas(extraccion: Extraccion, filtros: FiltrosDTO, alertas: 
             "jornadas_sin_finalizar": sin_finalizar,
             "ocupacion_por_jornada": ocupacion[:5],
         },
-        "ejemplos": _muestra(
-            df,
-            [
-                "nombre_jornada",
-                "tipo_jornada",
-                "fecha_inicio",
-                "estatus",
-                "aforo_maximo",
-                "total_asistentes",
-            ],
-        ),
     }
 
 
@@ -549,7 +491,6 @@ def _transformar_mobiliario(extraccion: Extraccion, filtros: FiltrosDTO, alertas
         "comparativa": None,
         "serie_mensual": [],
         "indicadores": {"unidades_mobiliario": suma_mobiliario, "bienes_inactivos": inactivos},
-        "ejemplos": _muestra(df, ["tipo_bien", "nombre_item", "categoria", "cantidad", "estatus"]),
     }
 
 
@@ -581,13 +522,10 @@ def _transformar_transporte(extraccion: Extraccion, filtros: FiltrosDTO, alertas
             resumen_secciones[nombre]["bajo_stock"] = len(bajos)
             resumen_secciones[nombre]["por_estatus"] = _distribucion(df, "estatus")
             if len(bajos):
-                nombres = (
-                    ", ".join(str(n) for n in bajos["nombre"].head(5)) if "nombre" in bajos else ""
-                )
                 alertas.append(
                     _alerta(
                         "critico",
-                        f"{len(bajos)} repuesto(s) con cantidad menor a {umbral}: {nombres}.",
+                        f"{len(bajos)} repuesto(s) con cantidad menor a {umbral} unidades.",
                     )
                 )
         elif nombre == "rutas":
@@ -602,7 +540,6 @@ def _transformar_transporte(extraccion: Extraccion, filtros: FiltrosDTO, alertas
         "distribuciones": {},
         "comparativa": None,
         "serie_mensual": [],
-        "ejemplos": {},
     }
 
 
@@ -645,7 +582,11 @@ def procesar(
     filtros: FiltrosDTO,
     id_empleado: int | None,
     limit: int | None = None,
+    adaptador: AdaptadorFuenteDatos | None = None,
 ) -> Resumen:
     limite = limit or obtener_ajustes().limite_registros
-    extraccion = extraer(modulo, filtros, id_empleado, limite)
+    if adaptador is not None:
+        extraccion = extraer(modulo, filtros, id_empleado, limite, adaptador)
+    else:
+        extraccion = extraer(modulo, filtros, id_empleado, limite)
     return transformar(modulo, extraccion, filtros)
