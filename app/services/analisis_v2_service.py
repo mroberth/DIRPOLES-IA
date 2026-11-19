@@ -2,10 +2,13 @@ import json
 import time
 from typing import Any
 
+import pandas as pd
+
 from app.knowledge.dirpoles4.directrices import sanitizar_observacion_usuario
 from app.schemas.response import MetaDTO
 from app.schemas.v2 import AnalisisRequestV2DTO, AnalisisResponseV2DTO
 from app.services import gemini_service
+from app.services.ml_service import predecir_demanda
 
 
 def _calcular_distribuciones(
@@ -107,9 +110,63 @@ def ejecutar_analisis_v2(peticion: AnalisisRequestV2DTO) -> AnalisisResponseV2DT
 
     totales_calc = dict(peticion.metricas.totales)
     registros_procesados = sum(totales_calc.values())
+
+    serie_mensual_calc = [
+        {"mes": p.mes, "cantidad": p.cantidad} for p in peticion.metricas.serie_mensual
+    ]
+
+    # Ingesta opcional de filas o registros planos para auto-agregación con Pandas
+    if peticion.registros_crudos and len(peticion.registros_crudos) > 0:
+        df_crudo = pd.DataFrame(peticion.registros_crudos)
+        if not df_crudo.empty:
+            if not totales_calc:
+                totales_calc["total_registros"] = len(df_crudo)
+                registros_procesados = len(df_crudo)
+
+            if not serie_mensual_calc:
+                cols_fecha = [
+                    c
+                    for c in df_crudo.columns
+                    if any(k in c.lower() for k in ("fecha", "created", "date", "mes"))
+                ]
+                if cols_fecha:
+                    col_f = cols_fecha[0]
+                    fechas_v = pd.to_datetime(df_crudo[col_f], errors="coerce").dropna()
+                    if not fechas_v.empty:
+                        conteos_m = (
+                            fechas_v.dt.to_period("M").astype(str).value_counts().sort_index()
+                        )
+                        serie_mensual_calc = [
+                            {"mes": str(m), "cantidad": int(cnt)} for m, cnt in conteos_m.items()
+                        ]
+
+            if not distribuciones:
+                cols_cat = [
+                    c
+                    for c in df_crudo.columns
+                    if c not in cols_fecha
+                    and (
+                        df_crudo[c].dtype.kind in ("O", "U", "S")
+                        or pd.api.types.is_string_dtype(df_crudo[c])
+                    )
+                    and c.lower() not in ("id", "codigo", "uuid")
+                ]
+                for col in cols_cat[:2]:
+                    conteos_cat = df_crudo[col].dropna().value_counts().head(8)
+                    tot_cat = len(df_crudo)
+                    items_d = []
+                    for val, cant in conteos_cat.items():
+                        pct = round((cant / tot_cat) * 100.0, 2) if tot_cat > 0 else 0.0
+                        items_d.append(
+                            {"valor": str(val), "cantidad": int(cant), "porcentaje": pct}
+                        )
+                    distribuciones[f"por_{col}"] = items_d
+
     if registros_procesados == 0 and distribuciones:
         primer_dist = next(iter(distribuciones.values()))
         registros_procesados = sum(d["cantidad"] for d in primer_dist)
+
+    prediccion_ml = predecir_demanda(serie_mensual_calc)
 
     resumen: dict[str, Any] = {
         "modulo": peticion.dominio,
@@ -119,13 +176,12 @@ def ejecutar_analisis_v2(peticion: AnalisisRequestV2DTO) -> AnalisisResponseV2DT
         },
         "totales": totales_calc,
         "distribuciones": distribuciones,
-        "serie_mensual": [
-            {"mes": p.mes, "cantidad": p.cantidad} for p in peticion.metricas.serie_mensual
-        ],
+        "serie_mensual": serie_mensual_calc,
         "comparativa": comparativa,
         "indicadores": peticion.metricas.indicadores,
         "alertas": alertas,
         "registros_procesados": registros_procesados,
+        "prediccion_ml": prediccion_ml,
     }
 
     # Construcción del prompt especializado
@@ -145,7 +201,10 @@ def ejecutar_analisis_v2(peticion: AnalisisRequestV2DTO) -> AnalisisResponseV2DT
         "3. DEBES INCLUIR AL MENOS UN GRÁFICO VISUAL MERMAID.JS (```mermaid ... ``` con 'pie title ...' o "
         "'xychart-beta') representando la distribución o tendencia más relevante.\n"
         "4. Usa bloques de cita (> ⚠️ **Punto Crítico:** ...) para resaltar alertas prioritarias.\n"
-        "5. No inventes datos ni asumas información ajena a las métricas recibidas."
+        "5. LENGUAJE ACCESIBLE: Presenta las proyecciones y métricas de Machine Learning (R², MAE, RMSE) en términos "
+        "claros de negocio (ej. 'Pronóstico para el próximo mes', 'Confiabilidad del Pronóstico (R²)', 'Margen de Variación (MAE)'). "
+        "No uses símbolos de dólar $ en las siglas.\n"
+        "6. No inventes datos ni asumas información ajena a las métricas recibidas."
     )
 
     observacion = (

@@ -58,7 +58,10 @@ def construir_system_prompt(modulo: Modulo, conocimiento: BaseConocimiento | Non
         "representando la distribución de datos más importante.\n"
         "4. Usa bloques de cita (> ⚠️ **Punto Crítico:** ...) para resaltar alertas u "
         "observaciones que requieran atención inmediata.\n"
-        "5. No inventes cifras: cíñete estrictamente a los datos recibidos."
+        "5. LENGUAJE CLARO Y ACCESIBLE: Si incluyes proyecciones o métricas de Machine Learning (R², MAE, RMSE), "
+        "exprésalas en lenguaje comprensible para personal de salud o directivo (ej: 'Pronóstico para el próximo mes', "
+        "'Confiabilidad del Pronóstico (R²)', 'Margen de Variación Esperado (MAE: ±X casos)'). NUNCA uses símbolos de dólar $ en las siglas.\n"
+        "6. No inventes cifras: cíñete estrictamente a los datos recibidos."
     )
 
 
@@ -76,6 +79,7 @@ CAMPOS_PERMITIDOS_LLM: frozenset[str] = frozenset(
         "indicadores",
         "secciones",
         "alertas",
+        "prediccion_ml",
     }
 )
 
@@ -205,6 +209,28 @@ class SeccionTransporteContexto(BaseModel):
     bajo_stock: int | None = None
 
 
+class MetricasEvaluacionMLContexto(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    r2_score: float = Field(ge=0.0, le=1.0)
+    mae: float = Field(ge=0.0)
+    mse: float = Field(ge=0.0)
+    rmse: float = Field(ge=0.0)
+
+
+class PrediccionMLContexto(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    disponible: bool
+    motivo: str | None = None
+    algoritmo: str | None = None
+    periodos_entrenados: int | None = None
+    proximo_mes: str | None = None
+    prediccion_estimada: int | None = None
+    margen_error_mae: float | None = None
+    tendencia: str | None = None
+    tasa_cambio_mensual: float | None = None
+    metricas_evaluacion: MetricasEvaluacionMLContexto | None = None
+
+
 class ContextoAnaliticoSeguro(BaseModel):
     model_config = ConfigDict(extra="forbid")
     modulo: str = Field(max_length=50)
@@ -218,6 +244,7 @@ class ContextoAnaliticoSeguro(BaseModel):
     indicadores: IndicadoresContexto = Field(default_factory=IndicadoresContexto)
     secciones: dict[str, SeccionTransporteContexto] = Field(default_factory=dict)
     alertas: list[AlertaContexto] = Field(default_factory=list)
+    prediccion_ml: PrediccionMLContexto | None = None
 
     @field_validator("distribuciones")
     @classmethod
@@ -508,6 +535,33 @@ def _sanitizar_estructura_anidada(resumen: dict[str, Any]) -> dict[str, Any]:
                         }
                     )
     salida["alertas"] = alertas_saneadas
+
+    # Predicción Machine Learning (series temporales)
+    if "prediccion_ml" in resumen and isinstance(resumen["prediccion_ml"], dict):
+        pml = resumen["prediccion_ml"]
+        if pml.get("disponible") is True:
+            me = pml.get("metricas_evaluacion") if isinstance(pml.get("metricas_evaluacion"), dict) else {}
+            salida["prediccion_ml"] = {
+                "disponible": True,
+                "algoritmo": str(pml.get("algoritmo", "Regresión Lineal OLS"))[:100],
+                "periodos_entrenados": int(pml.get("periodos_entrenados", 0)),
+                "proximo_mes": str(pml.get("proximo_mes", "Periodo Siguiente"))[:20],
+                "prediccion_estimada": max(0, int(pml.get("prediccion_estimada", 0))),
+                "margen_error_mae": float(pml.get("margen_error_mae", 0.0)),
+                "tendencia": str(pml.get("tendencia", "Estable"))[:30],
+                "tasa_cambio_mensual": float(pml.get("tasa_cambio_mensual", 0.0)),
+                "metricas_evaluacion": {
+                    "r2_score": max(0.0, min(1.0, float(me.get("r2_score", 0.0)))),
+                    "mae": max(0.0, float(me.get("mae", 0.0))),
+                    "mse": max(0.0, float(me.get("mse", 0.0))),
+                    "rmse": max(0.0, float(me.get("rmse", 0.0))),
+                },
+            }
+        else:
+            salida["prediccion_ml"] = {
+                "disponible": False,
+                "motivo": str(pml.get("motivo", ""))[:200],
+            }
 
     return salida
 

@@ -75,7 +75,11 @@ class AnalisisRequestV2DTO(BaseModel):
         description="Objetivo del informe analítico.",
     )
     periodo: PeriodoV2DTO = Field(default_factory=PeriodoV2DTO)
-    metricas: MetricasEntradaV2DTO
+    metricas: MetricasEntradaV2DTO = Field(default_factory=MetricasEntradaV2DTO)
+    registros_crudos: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Lote opcional de filas o registros planos para que el microservicio realice la agregación con Pandas.",
+    )
     rol_analista: str | None = Field(
         default=None,
         max_length=200,

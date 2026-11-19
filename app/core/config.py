@@ -27,7 +27,7 @@ class Ajustes(BaseSettings):
     db_name_security: str = "dirpoles_security"
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.5-flash"
+    gemini_model: str = "gemini-3.1-flash-lite"
     mock_llm: bool = True
 
     umbral_stock_critico_insumos: int = Field(default=10, ge=1)

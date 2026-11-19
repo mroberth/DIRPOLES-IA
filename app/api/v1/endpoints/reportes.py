@@ -1,3 +1,4 @@
+import logging
 import time
 from typing import Annotated
 
@@ -66,7 +67,12 @@ def generar_reporte(
     try:
         informe = cliente.generar_informe(system_prompt, user_prompt, contexto)
         modo = cliente.modo
-    except Exception:
+    except Exception as exc:
+        logging.getLogger("dirpoles_ia.reportes").warning(
+            "Fallo al invocar Google Gemini (%s): %s. Conmutando a ClienteSimulado de respaldo.",
+            type(exc).__name__,
+            exc,
+        )
         informe = gemini_service.ClienteSimulado().generar_informe(
             system_prompt, user_prompt, contexto
         )

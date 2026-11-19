@@ -8,6 +8,7 @@ from app.adapters.dirpoles4 import AdaptadorDirpoles4SQL
 from app.core.config import obtener_ajustes
 from app.schemas.enums import Modulo
 from app.schemas.request import FiltrosDTO
+from app.services.ml_service import predecir_demanda
 
 Resumen = dict[str, Any]
 
@@ -574,6 +575,7 @@ def transformar(
     resumen["periodo"] = _fechas_periodo(filtros)
     resumen["alertas"] = alertas
     resumen["registros_procesados"] = int(sum(extraccion.totales.values()))
+    resumen["prediccion_ml"] = predecir_demanda(resumen.get("serie_mensual") or [])
     return resumen
 
 

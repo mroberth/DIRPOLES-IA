@@ -19,8 +19,16 @@ class ClienteGemini:
 
     def __init__(self, api_key: str, modelo: str) -> None:
         from google import genai
+        from google.genai import types
 
-        self._cliente = genai.Client(api_key=api_key)
+        try:
+            # Timeout de 25 segundos (25000 ms) para fail-fast hacia ClienteSimulado si la red o API cuelgan
+            self._cliente = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=25000),
+            )
+        except Exception:
+            self._cliente = genai.Client(api_key=api_key)
         self._modelo = modelo
 
     def generar_informe(
@@ -186,6 +194,25 @@ class ClienteSimulado:
         indicadores = _seccion_indicadores(resumen)
         if indicadores:
             partes.extend(["", "**Indicadores clave:**", "", indicadores])
+
+        pml = resumen.get("prediccion_ml")
+        if isinstance(pml, dict) and pml.get("disponible"):
+            me = pml.get("metricas_evaluacion") if isinstance(pml.get("metricas_evaluacion"), dict) else {}
+            partes.extend(
+                [
+                    "",
+                    "**🔮 Proyección de Demanda para el Próximo Mes (Estimación con Machine Learning):**",
+                    "",
+                    f"* **Pronóstico Estimado ({pml.get('proximo_mes', 'N/A')}):** **{pml.get('prediccion_estimada', 0)} casos/atenciones estimadas** (margen de variación esperado: ±{pml.get('margen_error_mae', 0.0)}).",
+                    f"* **Comportamiento Histórico Aprendido:** Tendencia **{pml.get('tendencia', 'Estable')}** (ritmo estimado: {pml.get('tasa_cambio_mensual', 0.0):+} casos/mes).",
+                    f"* **Historial Clínico Evaluado:** {pml.get('periodos_entrenados', 0)} periodos mensuales analizados.",
+                    "* **Indicadores de Calidad del Pronóstico:**",
+                    f"  - Confiabilidad del Ajuste (R²): {me.get('r2_score', 0.0)}",
+                    f"  - Margen de Error Promedio (MAE): ±{me.get('mae', 0.0)} casos",
+                    f"  - Desviación Cuadrática Típica (RMSE): {me.get('rmse', 0.0)}",
+                    f"  *(Modelo predictivo basado en {pml.get('algoritmo', 'Regresión Lineal OLS sobre series temporales')})*.",
+                ]
+            )
 
         partes.extend(
             [
