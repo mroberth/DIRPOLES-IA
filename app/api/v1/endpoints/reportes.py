@@ -62,6 +62,7 @@ def generar_reporte(
         "resumen": contexto_seguro,
         "intencion": peticion.intencion.value,
         "modulo": peticion.modulo.value,
+        "observacion_usuario": peticion.observacion_usuario,
     }
     cliente = gemini_service.obtener_cliente()
     try:

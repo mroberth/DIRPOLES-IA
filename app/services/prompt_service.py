@@ -591,6 +591,38 @@ def _json_resumen(resumen: dict[str, Any]) -> str:
     return json.dumps(contexto_seguro, ensure_ascii=False, indent=1, default=str)
 
 
+def resolver_tipo_grafico(
+    observacion: str | None = None,
+    distribuciones: dict[str, Any] | None = None,
+) -> str:
+    """Regla de inferencia simbólica para selección del tipo de gráfico Mermaid.js.
+
+    1. Si el usuario solicita explícitamente barras ('barra', 'barras', 'columnas', 'histograma') -> 'barras'.
+    2. Si el usuario solicita líneas / tendencia ('linea', 'lineas', 'tendencia', 'historico') -> 'lineas'.
+    3. Si el usuario solicita combinado ('combinado', 'comparativa', 'mixto') -> 'combinado'.
+    4. Si el usuario solicita pastel ('pastel', 'dona', 'torta', 'circular', 'pie') -> 'pie'.
+    5. Heurística experta (por defecto): Si alguna distribución principal tiene más de 4 categorías -> 'barras'
+       (para evitar saturación visual); si tiene 4 o menos -> 'pie'.
+    """
+    if observacion and isinstance(observacion, str):
+        obs_lower = observacion.lower()
+        if any(term in obs_lower for term in ("barra", "barras", "columna", "columnas", "histograma", "xychart")):
+            return "barras"
+        if any(term in obs_lower for term in ("linea", "lineas", "tendencia", "historico")):
+            return "lineas"
+        if any(term in obs_lower for term in ("combinado", "comparativa", "mixto")):
+            return "combinado"
+        if any(term in obs_lower for term in ("pastel", "dona", "torta", "circular", "pie")):
+            return "pie"
+
+    if distribuciones and isinstance(distribuciones, dict):
+        for filas in distribuciones.values():
+            if isinstance(filas, list) and len(filas) > 4:
+                return "barras"
+
+    return "pie"
+
+
 def construir_user_prompt(
     modulo: Modulo,
     intencion: Intencion,
@@ -607,6 +639,32 @@ def construir_user_prompt(
     fecha_fin = periodo.get("fecha_fin") or "la fecha actual"
     observacion = kb.resolver_directriz(observacion_usuario)
     enfoque = kb.obtener_enfoque(intencion)
+    tipo_grafico = resolver_tipo_grafico(observacion_usuario, contexto_seguro.get("distribuciones"))
+
+    if tipo_grafico == "barras":
+        instruccion_grafico = (
+            "AL MENOS UN GRÁFICO VISUAL Mermaid.js OBLIGATORIAMENTE DE BARRAS usando la sintaxis 'xychart-beta' "
+            "(ejemplo: ```mermaid\nxychart-beta\n    title \"...\"\n    x-axis [\"A\", \"B\"]\n    bar [10, 20]\n```). "
+            "Regla de inferencia: el usuario solicitó barras o la cardinalidad supera 4 categorías; NO uses gráfico de pastel (pie). "
+            "REGLA CRÍTICA DE LEGIBILIDAD EN BARRAS: En el x-axis NUNCA coloques nombres largos ni el prefijo redundante 'PNF '; "
+            "usa etiquetas cortas de máximo 12 caracteres (ej: 'Informática', 'Admin.', 'Agroalim.', 'Contaduría') "
+            "para que las etiquetas no se solapen ni se lean pegadas"
+        )
+    elif tipo_grafico == "lineas":
+        instruccion_grafico = (
+            "AL MENOS UN GRÁFICO VISUAL Mermaid.js OBLIGATORIAMENTE DE LÍNEAS / TENDENCIA usando la sintaxis 'xychart-beta' "
+            "(ejemplo: ```mermaid\nxychart-beta\n    title \"...\"\n    x-axis [\"Ene\", \"Feb\"]\n    line [10, 20]\n```). "
+            "Regla de inferencia: el usuario solicitó gráfico de líneas/tendencia; usa 'line [...]' en xychart-beta"
+        )
+    elif tipo_grafico == "combinado":
+        instruccion_grafico = (
+            "AL MENOS UN GRÁFICO VISUAL Mermaid.js COMBINADO DE BARRAS Y LÍNEAS usando la sintaxis 'xychart-beta' "
+            "(ejemplo: ```mermaid\nxychart-beta\n    title \"...\"\n    x-axis [\"A\", \"B\"]\n    bar [10, 20]\n    line [8, 15]\n```). "
+            "Regla de inferencia: el usuario solicitó gráfico combinado; incluye tanto 'bar [...]' como 'line [...]'"
+        )
+    else:
+        instruccion_grafico = "AL MENOS UN GRÁFICO VISUAL ```mermaid pie o xychart-beta)"
+
     return (
         f"Módulo Analizado: {modulo.value}\n"
         f"Intención del Informe: {intencion.value}\n"
@@ -618,8 +676,7 @@ def construir_user_prompt(
         f"{observacion}\n\n"
         "REQUISITOS OBLIGATORIOS DE ESTRUCTURA Y FORMATO VISUAL:\n"
         "1. Resumen Ejecutivo (Visión general con métricas destacadas y tabla resumen).\n"
-        "2. Hallazgos Clave y Puntos Críticos (Incluye tablas de distribución, citas de alertas "
-        "> ⚠️ y AL MENOS UN GRÁFICO VISUAL ```mermaid pie o xychart-beta).\n"
+        f"2. Hallazgos Clave y Puntos Críticos (Incluye tablas de distribución, citas de alertas > ⚠️ y {instruccion_grafico}).\n"
         "3. Recomendaciones Operativas para la Toma de Decisiones (Lista numerada priorizada "
         "y concreta)."
     )

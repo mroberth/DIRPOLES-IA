@@ -231,6 +231,7 @@ def ejecutar_analisis_v2(peticion: AnalisisRequestV2DTO) -> AnalisisResponseV2DT
         "resumen": resumen,
         "intencion": peticion.intencion.value,
         "modulo": peticion.dominio,
+        "observacion_usuario": peticion.observacion_usuario,
     }
 
     cliente = gemini_service.obtener_cliente()

@@ -129,11 +129,70 @@ def _seccion_totales(resumen: dict[str, Any]) -> str:
     return "\n".join(lineas)
 
 
-def _grafico_mermaid_distribucion(clave: str, distribuciones: dict[str, Any]) -> str:
+def _abreviar_etiqueta_eje(valor: Any, max_len: int = 14) -> str:
+    texto = str(valor).strip().replace('"', "'")
+    for prefijo in ("PNF ", "pnf ", "Pnf ", "Licenciatura en ", "TSU en "):
+        if texto.startswith(prefijo):
+            texto = texto[len(prefijo):].strip()
+            break
+    mapeo = {
+        "Ciencias de la Información": "Cs. Información",
+        "Higiene y Seguridad Laboral": "Higiene y Seg.",
+        "Contaduría Pública": "Contaduría",
+        "Administración": "Admin.",
+        "Agroalimentación": "Agroalim.",
+    }
+    texto = mapeo.get(texto, texto)
+    if len(texto) > max_len:
+        texto = texto[:max_len - 1] + "."
+    return texto
+
+
+def _grafico_mermaid_distribucion(
+    clave: str,
+    distribuciones: dict[str, Any],
+    tipo_grafico: str = "pie",
+) -> str:
     filas = distribuciones.get(clave) or []
     if not filas:
         return ""
-    lineas = [f"\n```mermaid\npie title Distribución por {_rotulo(clave)}"]
+    rotulo = _rotulo(clave)
+
+    if tipo_grafico == "barras":
+        etiquetas = [f'"{_abreviar_etiqueta_eje(f["valor"])}"' for f in filas]
+        cantidades = [str(f["cantidad"]) for f in filas]
+        return (
+            f"\n```mermaid\nxychart-beta\n"
+            f'    title "Distribución por {rotulo}"\n'
+            f'    x-axis [{", ".join(etiquetas)}]\n'
+            f'    bar [{", ".join(cantidades)}]\n'
+            f"```\n"
+        )
+
+    if tipo_grafico == "lineas":
+        etiquetas = [f'"{_abreviar_etiqueta_eje(f["valor"])}"' for f in filas]
+        cantidades = [str(f["cantidad"]) for f in filas]
+        return (
+            f"\n```mermaid\nxychart-beta\n"
+            f'    title "Tendencia por {rotulo}"\n'
+            f'    x-axis [{", ".join(etiquetas)}]\n'
+            f'    line [{", ".join(cantidades)}]\n'
+            f"```\n"
+        )
+
+    if tipo_grafico == "combinado":
+        etiquetas = [f'"{_abreviar_etiqueta_eje(f["valor"])}"' for f in filas]
+        cantidades = [str(f["cantidad"]) for f in filas]
+        return (
+            f"\n```mermaid\nxychart-beta\n"
+            f'    title "Comparativa por {rotulo}"\n'
+            f'    x-axis [{", ".join(etiquetas)}]\n'
+            f'    bar [{", ".join(cantidades)}]\n'
+            f'    line [{", ".join(cantidades)}]\n'
+            f"```\n"
+        )
+
+    lineas = [f"\n```mermaid\npie title Distribución por {rotulo}"]
     for fila in filas:
         val = str(fila['valor']).replace('"', "'")
         lineas.append(f'    "{val}" : {fila["cantidad"]}')
@@ -150,7 +209,9 @@ class ClienteSimulado:
         user_prompt: str,
         contexto: dict[str, Any],
     ) -> str:
-        del system_prompt, user_prompt
+        del system_prompt
+        from app.services.prompt_service import resolver_tipo_grafico
+
         resumen: dict[str, Any] = contexto.get("resumen", {})
         modulo = resumen.get("modulo", "desconocido")
         intencion = contexto.get("intencion", "resumen_ejecutivo")
@@ -159,6 +220,9 @@ class ClienteSimulado:
         fin = periodo.get("fecha_fin") or "la fecha actual"
         alertas = resumen.get("alertas", [])
         distribuciones = resumen.get("distribuciones", {}) or {}
+
+        obs_candidato = contexto.get("observacion_usuario") or user_prompt
+        tipo_grafico = resolver_tipo_grafico(obs_candidato, distribuciones)
 
         criticas = [a for a in alertas if a.get("nivel") == "critico"]
         advertencias = [a for a in alertas if a.get("nivel") == "advertencia"]
@@ -186,7 +250,9 @@ class ClienteSimulado:
             tabla = _tabla_distribucion(clave, distribuciones)
             if tabla:
                 partes.append(tabla)
-                grafico = _grafico_mermaid_distribucion(clave, distribuciones)
+                grafico = _grafico_mermaid_distribucion(
+                    clave, distribuciones, tipo_grafico=tipo_grafico
+                )
                 if grafico:
                     partes.append(grafico)
 

@@ -126,6 +126,35 @@ class TestPromptService(unittest.TestCase):
         self.assertIn("por_genero", seguro_mixto["distribuciones"])
         self.assertNotIn("por_pnf", seguro_mixto["distribuciones"])
 
+    def test_resolver_tipo_grafico_preferencia_usuario_y_heuristica(self) -> None:
+        """Verifica la regla simbólica de selección de gráficos (Preferencia vs Heurística)."""
+        # 1. Usuario pide barras explícitamente
+        self.assertEqual(prompt_service.resolver_tipo_grafico("Quiero un gráfico de barras"), "barras")
+        self.assertEqual(prompt_service.resolver_tipo_grafico("Por favor mostrar en columnas"), "barras")
+
+        # 2. Usuario pide líneas / tendencia
+        self.assertEqual(prompt_service.resolver_tipo_grafico("Mostrar gráfico de lineas"), "lineas")
+        self.assertEqual(prompt_service.resolver_tipo_grafico("Ver tendencia histórica"), "lineas")
+
+        # 3. Usuario pide combinado
+        self.assertEqual(prompt_service.resolver_tipo_grafico("Reporte combinado"), "combinado")
+
+        # 4. Usuario pide pastel explícitamente
+        self.assertEqual(prompt_service.resolver_tipo_grafico("Mostrar diagrama de pastel"), "pie")
+        self.assertEqual(prompt_service.resolver_tipo_grafico("Generar gráfica tipo dona"), "pie")
+
+        # 5. Heurística: más de 4 categorías -> barras
+        distribucion_cinco = {
+            "por_pnf": [{"valor": f"PNF {i}", "cantidad": i} for i in range(5)]
+        }
+        self.assertEqual(prompt_service.resolver_tipo_grafico(None, distribucion_cinco), "barras")
+
+        # 6. Heurística: 4 o menos categorías -> pastel
+        distribucion_dos = {
+            "por_genero": [{"valor": "F", "cantidad": 10}, {"valor": "M", "cantidad": 8}]
+        }
+        self.assertEqual(prompt_service.resolver_tipo_grafico(None, distribucion_dos), "pie")
+
 
 if __name__ == "__main__":
     unittest.main()
