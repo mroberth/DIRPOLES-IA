@@ -201,16 +201,27 @@ GRANT SELECT ON dirpoles_business.* TO 'dirpoles_ia_reader'@'localhost';
 -- 3. Otorgar permisos SELECT sobre el esquema de seguridad (requerido para cruces con la tabla 'empleado')
 GRANT SELECT ON dirpoles_security.* TO 'dirpoles_ia_reader'@'localhost';
 
--- 4. Aplicar cambios
+-- 4. Otorgar lectura del conocimiento declarativo
+GRANT SELECT ON dirpoles_knowledge.* TO 'dirpoles_ia_reader'@'localhost';
+
+-- 5. Aplicar cambios
 FLUSH PRIVILEGES;
 
--- 5. Salir
+-- 6. Salir
 EXIT;
 ```
 
 > [!IMPORTANT]
 > **¿Por qué son necesarios ambos esquemas?**  
 > El monolito utiliza arquitectura de doble esquema: `dirpoles_business` almacena las operaciones sustantivas de los módulos y `dirpoles_security` almacena el catálogo de empleados. Módulos como psicología y transporte cruzan información de ambas bases de datos.
+
+La configuración inicial de la base declarativa se aplica una sola vez con una cuenta administradora:
+
+```bash
+mysql -u root -p < database/migracion_knowledge_v2.sql
+```
+
+El servicio accede a `dirpoles_knowledge` solo con `SELECT`. Roles, instrucciones, catálogos, umbrales y plantillas de mensajes se cargan en caché por consumidor; las transformaciones, la validación de privacidad, la selección de gráficos y el fallback permanecen en Python. Si la base declarativa no está disponible, se registra el problema y se usa el conocimiento estático de respaldo.
 
 > [!NOTE]
 > **¿No tienes la base de datos MySQL disponible en este momento?**  
@@ -257,6 +268,11 @@ DB_NAME_SECURITY=dirpoles_security
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.5-flash
 MOCK_LLM=True
+
+# ============================================================
+# Base de Conocimiento declarativa
+# ============================================================
+KNOWLEDGE_BACKEND=mariadb
 
 # ============================================================
 # Parámetros del Motor Analítico

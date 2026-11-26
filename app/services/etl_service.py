@@ -6,6 +6,12 @@ import pandas as pd
 from app.adapters.base import AdaptadorFuenteDatos, Extraccion
 from app.adapters.dirpoles4 import AdaptadorDirpoles4SQL
 from app.core.config import obtener_ajustes
+from app.knowledge import obtener_conocimiento_por_defecto
+from app.knowledge.base import BaseConocimiento
+from app.knowledge.dirpoles4.parametros import (
+    MENSAJES_POR_DEFECTO,
+    UMBRALES_POR_DEFECTO,
+)
 from app.schemas.enums import Modulo
 from app.schemas.request import FiltrosDTO
 from app.services.ml_service import predecir_demanda
@@ -13,6 +19,23 @@ from app.services.ml_service import predecir_demanda
 Resumen = dict[str, Any]
 
 _ADAPTADOR_DEFAULT: AdaptadorFuenteDatos = AdaptadorDirpoles4SQL()
+
+
+def _kb(conocimiento: BaseConocimiento | None = None) -> BaseConocimiento:
+    """Resuelve la base de conocimiento activa (MariaDB o fallback estático)."""
+    return conocimiento or obtener_conocimiento_por_defecto()
+
+
+def _umbral(kb: BaseConocimiento, codigo_hecho: str) -> float:
+    """Lee un umbral declarativo de la base de conocimiento."""
+    por_defecto = UMBRALES_POR_DEFECTO.get(codigo_hecho, 0.0)
+    return float(kb.obtener_umbral(codigo_hecho, por_defecto))
+
+
+def _mensaje(kb: BaseConocimiento, codigo_conclusion: str, **valores: Any) -> str:
+    """Lee y formatea una plantilla de mensaje declarativa."""
+    por_defecto = MENSAJES_POR_DEFECTO.get(codigo_conclusion, "")
+    return kb.obtener_mensaje(codigo_conclusion, por_defecto, **valores)
 
 
 def extraer(
@@ -125,51 +148,75 @@ def _dias_hasta(vencimiento: Any) -> int | None:
     return int((fecha.date() - date.today()).days)
 
 
-def _montos_truncados(extraccion: Extraccion, alertas: list[dict[str, str]]) -> None:
+def _montos_truncados(
+    extraccion: Extraccion,
+    alertas: list[dict[str, str]],
+    conocimiento: BaseConocimiento,
+) -> None:
     for nombre, total in extraccion.totales.items():
         obtenidos = len(extraccion.datos.get(nombre, []))
         if total > obtenidos:
             alertas.append(
                 _alerta(
                     "advertencia",
-                    f"La colección '{nombre}' tiene {total} registros pero solo se analizaron "
-                    f"{obtenidos} por el límite de filas configurado.",
+                    _mensaje(
+                        conocimiento,
+                        "ALERTA_TRUNCAMIENTO",
+                        coleccion=nombre,
+                        total=total,
+                        analizados=obtenidos,
+                    ),
                 )
             )
 
 
-def _insumos_alertas(insumos: pd.DataFrame, alertas: list[dict[str, str]]) -> dict[str, Any]:
-    ajustes = obtener_ajustes()
+def _insumos_alertas(
+    insumos: pd.DataFrame,
+    alertas: list[dict[str, str]],
+    conocimiento: BaseConocimiento,
+) -> dict[str, Any]:
     if insumos.empty:
         return {"vencidos": 0, "por_vencer_30_dias": 0, "stock_critico": []}
+    umbral_stock = _umbral(conocimiento, "STOCK_INSUMO_MEDICO")
+    umbral_vencido = _umbral(conocimiento, "DIAS_VENCIMIENTO_VENCIDO")
+    umbral_proximo = _umbral(conocimiento, "DIAS_VENCIMIENTO_PROXIMO")
     vencidos = 0
     por_vencer = 0
     for fecha in insumos.get("fecha_vencimiento", pd.Series(dtype=object)):
         dias = _dias_hasta(fecha)
         if dias is None:
             continue
-        if dias < 0:
+        if dias < umbral_vencido:
             vencidos += 1
-        elif dias <= 30:
+        elif dias <= umbral_proximo:
             por_vencer += 1
     critico = insumos[
-        insumos.get("cantidad", pd.Series(dtype=object)).fillna(0).astype(int)
-        < ajustes.umbral_stock_critico_insumos
+        insumos.get("cantidad", pd.Series(dtype=object)).fillna(0).astype(int) < umbral_stock
     ]
     if vencidos:
         alertas.append(
-            _alerta("critico", f"{vencidos} insumo(s) con fecha de vencimiento vencida.")
+            _alerta(
+                "critico",
+                _mensaje(conocimiento, "ALERTA_INSUMOS_VENCIDOS", cantidad=vencidos),
+            )
         )
     if por_vencer:
         alertas.append(
-            _alerta("advertencia", f"{por_vencer} insumo(s) vencen en los próximos 30 días.")
+            _alerta(
+                "advertencia",
+                _mensaje(conocimiento, "ALERTA_INSUMOS_POR_VENCER", cantidad=por_vencer),
+            )
         )
     if len(critico):
         alertas.append(
             _alerta(
                 "critico",
-                f"{len(critico)} insumo(s) por debajo del umbral crítico "
-                f"({ajustes.umbral_stock_critico_insumos} unidades).",
+                _mensaje(
+                    conocimiento,
+                    "ALERTA_INSUMOS_STOCK_CRITICO",
+                    cantidad=len(critico),
+                    umbral=int(umbral_stock),
+                ),
             )
         )
     return {
@@ -186,18 +233,28 @@ def _insumos_alertas(insumos: pd.DataFrame, alertas: list[dict[str, str]]) -> di
     }
 
 
-def _transformar_general(extraccion: Extraccion, filtros: FiltrosDTO, alertas: list) -> Resumen:
+def _transformar_general(
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
+) -> Resumen:
     del filtros
     df = extraccion.datos.get("atenciones", pd.DataFrame())
     por_area = _distribucion(df, "area")
     if por_area:
         concentrada = por_area[0]
-        if concentrada["porcentaje"] >= 40.0:
+        umbral_area = _umbral(conocimiento, "CONCENTRACION_AREA_GENERAL")
+        if concentrada["porcentaje"] >= umbral_area:
             alertas.append(
                 _alerta(
                     "advertencia",
-                    f"El área '{concentrada['valor']}' concentra el "
-                    f"{concentrada['porcentaje']}% de las atenciones del periodo.",
+                    _mensaje(
+                        conocimiento,
+                        "ALERTA_AREA_CONCENTRADA",
+                        valor=concentrada["valor"],
+                        porcentaje=concentrada["porcentaje"],
+                    ),
                 )
             )
     serie = _serie_mensual(df, "fecha")
@@ -215,19 +272,32 @@ def _transformar_general(extraccion: Extraccion, filtros: FiltrosDTO, alertas: l
     }
 
 
-def _transformar_medicina(extraccion: Extraccion, filtros: FiltrosDTO, alertas: list) -> Resumen:
+def _transformar_medicina(
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
+) -> Resumen:
     del filtros
     consultas = extraccion.datos.get("consultas", pd.DataFrame())
     insumos = extraccion.datos.get("insumos", pd.DataFrame())
-    indicadores_insumos = _insumos_alertas(insumos, alertas)
+    indicadores_insumos = _insumos_alertas(insumos, alertas, conocimiento)
     serie = _serie_mensual(consultas, "fecha")
     comp = _comparativa(serie)
-    if comp and isinstance(comp.get("variacion_pct"), float) and comp["variacion_pct"] >= 25.0:
+    umbral_variacion = _umbral(conocimiento, "VARIACION_CONSULTAS_MEDICAS")
+    if (
+        comp
+        and isinstance(comp.get("variacion_pct"), float)
+        and comp["variacion_pct"] >= umbral_variacion
+    ):
         alertas.append(
             _alerta(
                 "advertencia",
-                f"Las consultas médicas aumentaron un {comp['variacion_pct']}% "
-                "respecto al mes anterior.",
+                _mensaje(
+                    conocimiento,
+                    "ALERTA_CONSULTAS_AUMENTO",
+                    variacion=comp["variacion_pct"],
+                ),
             )
         )
     return {
@@ -243,7 +313,12 @@ def _transformar_medicina(extraccion: Extraccion, filtros: FiltrosDTO, alertas: 
     }
 
 
-def _transformar_psicologia(extraccion: Extraccion, filtros: FiltrosDTO, alertas: list) -> Resumen:
+def _transformar_psicologia(
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
+) -> Resumen:
     del filtros
     morbilidad = extraccion.datos.get("morbilidad", pd.DataFrame())
     citas = extraccion.datos.get("citas", pd.DataFrame())
@@ -251,24 +326,36 @@ def _transformar_psicologia(extraccion: Extraccion, filtros: FiltrosDTO, alertas
     pendientes = next((e["cantidad"] for e in por_estado if e["valor"] == "Pendiente"), 0)
     no_asistio = next((e["cantidad"] for e in por_estado if e["valor"] == "No asistió"), 0)
     total_citas = extraccion.totales.get("citas", 0)
+    umbral_inasistencia = _umbral(conocimiento, "TASA_AUSENTISMO_CITA_PSI")
+    umbral_diagnostico = _umbral(conocimiento, "CONCENTRACION_DIAGNOSTICO_PSI")
     if pendientes:
-        alertas.append(
-            _alerta("advertencia", f"{pendientes} cita(s) en estado Pendiente sin atender.")
-        )
-    if total_citas and no_asistio and _porcentaje(no_asistio, total_citas) >= 15.0:
-        alertas.append(
-            _alerta(
-                "critico",
-                f"El {_porcentaje(no_asistio, total_citas)}% de las citas terminó en 'No asistió'.",
-            )
-        )
-    top = _top_concentracion(morbilidad, "diagnostico")
-    if top and top[0]["porcentaje"] >= 30.0:
         alertas.append(
             _alerta(
                 "advertencia",
-                f"Una condición diagnóstica concentra el {top[0]['porcentaje']}% "
-                "de la morbilidad psicológica del periodo.",
+                _mensaje(conocimiento, "ALERTA_CITAS_PENDIENTES", cantidad=pendientes),
+            )
+        )
+    if total_citas and no_asistio and _porcentaje(no_asistio, total_citas) >= umbral_inasistencia:
+        alertas.append(
+            _alerta(
+                "critico",
+                _mensaje(
+                    conocimiento,
+                    "ALERTA_CITAS_NO_ASISTIO",
+                    porcentaje=_porcentaje(no_asistio, total_citas),
+                ),
+            )
+        )
+    top = _top_concentracion(morbilidad, "diagnostico")
+    if top and top[0]["porcentaje"] >= umbral_diagnostico:
+        alertas.append(
+            _alerta(
+                "advertencia",
+                _mensaje(
+                    conocimiento,
+                    "ALERTA_MORBILIDAD_CONCENTRADA",
+                    porcentaje=top[0]["porcentaje"],
+                ),
             )
         )
     serie = _serie_mensual(morbilidad, "fecha")
@@ -292,8 +379,13 @@ def _transformar_psicologia(extraccion: Extraccion, filtros: FiltrosDTO, alertas
     }
 
 
-def _transformar_orientacion(extraccion: Extraccion, filtros: FiltrosDTO, alertas: list) -> Resumen:
-    del filtros, alertas
+def _transformar_orientacion(
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
+) -> Resumen:
+    del filtros, alertas, conocimiento
     df = extraccion.datos.get("casos", pd.DataFrame())
     serie = _serie_mensual(df, "fecha")
     return {
@@ -308,11 +400,28 @@ def _transformar_orientacion(extraccion: Extraccion, filtros: FiltrosDTO, alerta
 
 
 def _transformar_trabajo_social(
-    extraccion: Extraccion, filtros: FiltrosDTO, alertas: list
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
 ) -> Resumen:
-    del filtros, alertas
+    del filtros
     df = extraccion.datos.get("registros", pd.DataFrame())
     por_submodulo = _distribucion(df, "submodulo")
+    umbral_becas = _umbral(conocimiento, "CONCENTRACION_SOLICITUD_BECA")
+    if por_submodulo:
+        primera = por_submodulo[0]
+        if primera["valor"] == "Becas" and primera["porcentaje"] >= umbral_becas:
+            alertas.append(
+                _alerta(
+                    "advertencia",
+                    _mensaje(
+                        conocimiento,
+                        "ALERTA_BECAS_CONCENTRADAS",
+                        porcentaje=primera["porcentaje"],
+                    ),
+                )
+            )
     serie = _serie_mensual(df, "fecha")
     return {
         "totales": extraccion.totales,
@@ -327,7 +436,10 @@ def _transformar_trabajo_social(
 
 
 def _transformar_discapacidad(
-    extraccion: Extraccion, filtros: FiltrosDTO, alertas: list
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
 ) -> Resumen:
     del filtros
     df = extraccion.datos.get("registros", pd.DataFrame())
@@ -353,11 +465,19 @@ def _transformar_discapacidad(
         if "grado" in df:
             graves = int((df["grado"].astype(str) == "Grave").sum())
     if graves:
-        alertas.append(_alerta("advertencia", f"{graves} caso(s) de discapacidad con grado Grave."))
+        alertas.append(
+            _alerta(
+                "advertencia",
+                _mensaje(conocimiento, "ALERTA_DISCAPACIDAD_GRAVE", cantidad=graves),
+            )
+        )
     if total and con_carnet < total:
         faltantes = total - con_carnet
         alertas.append(
-            _alerta("advertencia", f"{faltantes} registro(s) sin carnet de discapacidad asociado.")
+            _alerta(
+                "advertencia",
+                _mensaje(conocimiento, "ALERTA_SIN_CARNET", cantidad=faltantes),
+            )
         )
     serie = _serie_mensual(df, "fecha")
     return {
@@ -378,7 +498,12 @@ def _transformar_discapacidad(
     }
 
 
-def _transformar_referencias(extraccion: Extraccion, filtros: FiltrosDTO, alertas: list) -> Resumen:
+def _transformar_referencias(
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
+) -> Resumen:
     del filtros
     df = extraccion.datos.get("remisiones", pd.DataFrame())
     por_estado = _distribucion(df, "estado")
@@ -388,8 +513,12 @@ def _transformar_referencias(extraccion: Extraccion, filtros: FiltrosDTO, alerta
         alertas.append(
             _alerta(
                 "advertencia",
-                f"{pendientes} referencia(s) pendientes de resolución "
-                f"({_porcentaje(pendientes, total)}% del total).",
+                _mensaje(
+                    conocimiento,
+                    "ALERTA_REFERENCIAS_PENDIENTES",
+                    cantidad=pendientes,
+                    porcentaje=_porcentaje(pendientes, total),
+                ),
             )
         )
     serie = _serie_mensual(df, "fecha")
@@ -405,9 +534,15 @@ def _transformar_referencias(extraccion: Extraccion, filtros: FiltrosDTO, alerta
     }
 
 
-def _transformar_jornadas(extraccion: Extraccion, filtros: FiltrosDTO, alertas: list) -> Resumen:
+def _transformar_jornadas(
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
+) -> Resumen:
     del filtros
     df = extraccion.datos.get("jornadas", pd.DataFrame())
+    umbral_ocupacion = _umbral(conocimiento, "OCUPACION_JORNADA")
     por_estatus = _distribucion(df, "estatus")
     asistentes = (
         int(df["total_asistentes"].sum())
@@ -437,17 +572,24 @@ def _transformar_jornadas(extraccion: Extraccion, filtros: FiltrosDTO, alertas: 
                         "ocupacion_pct": _porcentaje(asist, aforo),
                     }
                 )
-        completa = [o for o in ocupacion if o["ocupacion_pct"] >= 100.0]
+        completa = [o for o in ocupacion if o["ocupacion_pct"] >= umbral_ocupacion]
         if completa:
             alertas.append(
                 _alerta(
                     "advertencia",
-                    f"{len(completa)} jornada(s) alcanzaron o superaron el 100% del aforo.",
+                    _mensaje(conocimiento, "ALERTA_JORNADAS_AFORO", cantidad=len(completa)),
                 )
             )
     if sin_finalizar:
         alertas.append(
-            _alerta("info", f"{sin_finalizar} jornada(s) aún no están en estatus Finalizada.")
+            _alerta(
+                "info",
+                _mensaje(
+                    conocimiento,
+                    "ALERTA_JORNADAS_SIN_FINALIZAR",
+                    cantidad=sin_finalizar,
+                ),
+            )
         )
     serie = _serie_mensual(df, "fecha_inicio")
     return {
@@ -467,14 +609,22 @@ def _transformar_jornadas(extraccion: Extraccion, filtros: FiltrosDTO, alertas: 
     }
 
 
-def _transformar_mobiliario(extraccion: Extraccion, filtros: FiltrosDTO, alertas: list) -> Resumen:
+def _transformar_mobiliario(
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
+) -> Resumen:
     del filtros
     df = extraccion.datos.get("bienes", pd.DataFrame())
     por_estatus = _distribucion(df, "estatus")
     inactivos = next((e["cantidad"] for e in por_estatus if e["valor"] == "Inactivo"), 0)
     if inactivos:
         alertas.append(
-            _alerta("info", f"{inactivos} bien(es) marcados como Inactivo en el inventario.")
+            _alerta(
+                "info",
+                _mensaje(conocimiento, "ALERTA_BIENES_INACTIVOS", cantidad=inactivos),
+            )
         )
     suma_mobiliario = 0
     if not df.empty and "cantidad" in df.columns:
@@ -495,7 +645,12 @@ def _transformar_mobiliario(extraccion: Extraccion, filtros: FiltrosDTO, alertas
     }
 
 
-def _transformar_transporte(extraccion: Extraccion, filtros: FiltrosDTO, alertas: list) -> Resumen:
+def _transformar_transporte(
+    extraccion: Extraccion,
+    filtros: FiltrosDTO,
+    alertas: list,
+    conocimiento: BaseConocimiento,
+) -> Resumen:
     del filtros
     resumen_secciones: dict[str, Any] = {}
     for nombre, df in extraccion.datos.items():
@@ -511,11 +666,16 @@ def _transformar_transporte(extraccion: Extraccion, filtros: FiltrosDTO, alertas
             if en_mantenimiento:
                 alertas.append(
                     _alerta(
-                        "advertencia", f"{en_mantenimiento} vehículo(s) en estado Mantenimiento."
+                        "advertencia",
+                        _mensaje(
+                            conocimiento,
+                            "ALERTA_VEHICULOS_MANTENIMIENTO",
+                            cantidad=en_mantenimiento,
+                        ),
                     )
                 )
         elif nombre == "repuestos":
-            umbral = obtener_ajustes().umbral_stock_critico_repuestos
+            umbral = _umbral(conocimiento, "STOCK_REPUESTOS_TRANSPORTE")
             columna_cantidad = (
                 df["cantidad"] if "cantidad" in df.columns else pd.Series(dtype=float)
             )
@@ -526,7 +686,12 @@ def _transformar_transporte(extraccion: Extraccion, filtros: FiltrosDTO, alertas
                 alertas.append(
                     _alerta(
                         "critico",
-                        f"{len(bajos)} repuesto(s) con cantidad menor a {umbral} unidades.",
+                        _mensaje(
+                            conocimiento,
+                            "ALERTA_REPUESTOS_BAJO_STOCK",
+                            cantidad=len(bajos),
+                            umbral=int(umbral),
+                        ),
                     )
                 )
         elif nombre == "rutas":
@@ -562,14 +727,19 @@ def transformar(
     modulo: Modulo,
     extraccion: Extraccion,
     filtros: FiltrosDTO,
+    conocimiento: BaseConocimiento | None = None,
 ) -> Resumen:
+    kb = _kb(conocimiento)
     alertas: list[dict[str, str]] = []
-    _montos_truncados(extraccion, alertas)
+    _montos_truncados(extraccion, alertas, kb)
     transformador = _TRANSFORMADORES[modulo]
-    resumen: Resumen = transformador(extraccion, filtros, alertas)
+    resumen: Resumen = transformador(extraccion, filtros, alertas, kb)
     if not any(extraccion.totales.values()):
         alertas.append(
-            _alerta("info", "No se encontraron registros que cumplan los filtros seleccionados.")
+            _alerta(
+                "info",
+                _mensaje(kb, "ALERTA_SIN_REGISTROS"),
+            )
         )
     resumen["modulo"] = modulo.value
     resumen["periodo"] = _fechas_periodo(filtros)
@@ -585,10 +755,11 @@ def procesar(
     id_empleado: int | None,
     limit: int | None = None,
     adaptador: AdaptadorFuenteDatos | None = None,
+    conocimiento: BaseConocimiento | None = None,
 ) -> Resumen:
     limite = limit or obtener_ajustes().limite_registros
     if adaptador is not None:
         extraccion = extraer(modulo, filtros, id_empleado, limite, adaptador)
     else:
         extraccion = extraer(modulo, filtros, id_empleado, limite)
-    return transformar(modulo, extraccion, filtros)
+    return transformar(modulo, extraccion, filtros, conocimiento=conocimiento)

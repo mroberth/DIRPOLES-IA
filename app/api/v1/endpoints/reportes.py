@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.consumers import PerfilConsumidor
 from app.core.security import validar_api_key
+from app.knowledge import obtener_conocimiento
 from app.schemas.enums import (
     AreaGeneral,
     EstadoCita,
@@ -35,11 +36,13 @@ def generar_reporte(
     _api_key: Annotated[PerfilConsumidor, Depends(validar_api_key)],
 ) -> ReporteResponseDTO:
     inicio = time.perf_counter()
+    conocimiento = obtener_conocimiento(_api_key.conocimiento_id)
     try:
         resumen = etl_service.procesar(
             modulo=peticion.modulo,
             filtros=peticion.filtros,
             id_empleado=peticion.id_empleado,
+            conocimiento=conocimiento,
         )
     except Exception as exc:
         raise HTTPException(
@@ -51,12 +54,13 @@ def generar_reporte(
             },
         ) from exc
 
-    contexto_seguro = prompt_service.filtrar_contexto_seguro(resumen)
+    contexto_seguro = prompt_service.filtrar_contexto_seguro(resumen, conocimiento=conocimiento)
     system_prompt, user_prompt = prompt_service.construir_prompts(
         modulo=peticion.modulo,
         intencion=peticion.intencion,
         resumen=contexto_seguro,
         observacion_usuario=peticion.observacion_usuario,
+        conocimiento=conocimiento,
     )
     contexto = {
         "resumen": contexto_seguro,
