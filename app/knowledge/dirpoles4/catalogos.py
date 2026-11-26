@@ -41,9 +41,11 @@ DOMINIOS_DISTRIBUCIONES: dict[str, frozenset[str]] = {
     "citas_por_estado": frozenset(e.value for e in EstadoCita),
     "por_tipo_bien": frozenset(e.value for e in TipoBien),
     "por_grado": frozenset(e.value for e in GradoDiscapacidad),
-    "por_tipo": frozenset(e.value for e in TipoDiscapacidad) | frozenset(e.value for e in TipoVehiculo),
+    "por_tipo": frozenset(e.value for e in TipoDiscapacidad)
+    | frozenset(e.value for e in TipoVehiculo),
     "por_estado": frozenset(e.value for e in EstadoReferencia),
-    "por_estatus": frozenset(e.value for e in EstadoJornada) | frozenset(e.value for e in EstadoInventario),
+    "por_estatus": frozenset(e.value for e in EstadoJornada)
+    | frozenset(e.value for e in EstadoInventario),
 }
 
 # Catálogo cerrado de distribuciones analíticas autorizadas para transmisión al LLM

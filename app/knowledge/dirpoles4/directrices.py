@@ -3,7 +3,7 @@ import re
 # Catálogo de directrices canónicas preaprobadas para el LLM externo.
 # Como DIRPOLES-4 no dispone actualmente de un catálogo formal de opciones predefinidas
 # para observacion_usuario y envía texto libre desde un textarea, este diccionario
-# permanece como catálogo de referencia extensible para directrices institucionales formalmente autorizadas.
+# permanece como catálogo extensible de directrices institucionales formalmente autorizadas.
 DIRECTRICES_CANONICAS: dict[str, str] = {}
 
 

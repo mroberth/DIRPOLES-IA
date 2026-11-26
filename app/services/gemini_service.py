@@ -22,7 +22,7 @@ class ClienteGemini:
         from google.genai import types
 
         try:
-            # Timeout de 25 segundos (25000 ms) para fail-fast hacia ClienteSimulado si la red o API cuelgan
+            # Timeout de 25 segundos para pasar al cliente simulado si falla la API.
             self._cliente = genai.Client(
                 api_key=api_key,
                 http_options=types.HttpOptions(timeout=25000),
@@ -133,7 +133,7 @@ def _abreviar_etiqueta_eje(valor: Any, max_len: int = 14) -> str:
     texto = str(valor).strip().replace('"', "'")
     for prefijo in ("PNF ", "pnf ", "Pnf ", "Licenciatura en ", "TSU en "):
         if texto.startswith(prefijo):
-            texto = texto[len(prefijo):].strip()
+            texto = texto[len(prefijo) :].strip()
             break
     mapeo = {
         "Ciencias de la Información": "Cs. Información",
@@ -144,7 +144,7 @@ def _abreviar_etiqueta_eje(valor: Any, max_len: int = 14) -> str:
     }
     texto = mapeo.get(texto, texto)
     if len(texto) > max_len:
-        texto = texto[:max_len - 1] + "."
+        texto = texto[: max_len - 1] + "."
     return texto
 
 
@@ -164,8 +164,8 @@ def _grafico_mermaid_distribucion(
         return (
             f"\n```mermaid\nxychart-beta\n"
             f'    title "Distribución por {rotulo}"\n'
-            f'    x-axis [{", ".join(etiquetas)}]\n'
-            f'    bar [{", ".join(cantidades)}]\n'
+            f"    x-axis [{', '.join(etiquetas)}]\n"
+            f"    bar [{', '.join(cantidades)}]\n"
             f"```\n"
         )
 
@@ -175,8 +175,8 @@ def _grafico_mermaid_distribucion(
         return (
             f"\n```mermaid\nxychart-beta\n"
             f'    title "Tendencia por {rotulo}"\n'
-            f'    x-axis [{", ".join(etiquetas)}]\n'
-            f'    line [{", ".join(cantidades)}]\n'
+            f"    x-axis [{', '.join(etiquetas)}]\n"
+            f"    line [{', '.join(cantidades)}]\n"
             f"```\n"
         )
 
@@ -186,15 +186,15 @@ def _grafico_mermaid_distribucion(
         return (
             f"\n```mermaid\nxychart-beta\n"
             f'    title "Comparativa por {rotulo}"\n'
-            f'    x-axis [{", ".join(etiquetas)}]\n'
-            f'    bar [{", ".join(cantidades)}]\n'
-            f'    line [{", ".join(cantidades)}]\n'
+            f"    x-axis [{', '.join(etiquetas)}]\n"
+            f"    bar [{', '.join(cantidades)}]\n"
+            f"    line [{', '.join(cantidades)}]\n"
             f"```\n"
         )
 
     lineas = [f"\n```mermaid\npie title Distribución por {rotulo}"]
     for fila in filas:
-        val = str(fila['valor']).replace('"', "'")
+        val = str(fila["valor"]).replace('"', "'")
         lineas.append(f'    "{val}" : {fila["cantidad"]}')
     lineas.append("```\n")
     return "\n".join(lineas)
@@ -221,7 +221,11 @@ class ClienteSimulado:
         alertas = resumen.get("alertas", [])
         distribuciones = resumen.get("distribuciones", {}) or {}
 
-        obs_candidato = contexto.get("observacion_usuario") or user_prompt
+        # La preferencia de gráfico debe provenir de la observación real del
+        # usuario, nunca del prompt completo: el prompt contiene las
+        # instrucciones de formato (incluida la palabra 'xychart') y sesgaría
+        # la heurística hacia barras incluso cuando el usuario no lo pidió.
+        obs_candidato = contexto.get("observacion_usuario")
         tipo_grafico = resolver_tipo_grafico(obs_candidato, distribuciones)
 
         criticas = [a for a in alertas if a.get("nivel") == "critico"]
@@ -256,27 +260,34 @@ class ClienteSimulado:
                 if grafico:
                     partes.append(grafico)
 
-
         indicadores = _seccion_indicadores(resumen)
         if indicadores:
             partes.extend(["", "**Indicadores clave:**", "", indicadores])
 
         pml = resumen.get("prediccion_ml")
         if isinstance(pml, dict) and pml.get("disponible"):
-            me = pml.get("metricas_evaluacion") if isinstance(pml.get("metricas_evaluacion"), dict) else {}
+            metricas_candidato = pml.get("metricas_evaluacion")
+            me = metricas_candidato if isinstance(metricas_candidato, dict) else {}
             partes.extend(
                 [
                     "",
-                    "**🔮 Proyección de Demanda para el Próximo Mes (Estimación con Machine Learning):**",
+                    "**🔮 Proyección de Demanda para el Próximo Mes "
+                    "(Estimación con Machine Learning):**",
                     "",
-                    f"* **Pronóstico Estimado ({pml.get('proximo_mes', 'N/A')}):** **{pml.get('prediccion_estimada', 0)} casos/atenciones estimadas** (margen de variación esperado: ±{pml.get('margen_error_mae', 0.0)}).",
-                    f"* **Comportamiento Histórico Aprendido:** Tendencia **{pml.get('tendencia', 'Estable')}** (ritmo estimado: {pml.get('tasa_cambio_mensual', 0.0):+} casos/mes).",
-                    f"* **Historial Clínico Evaluado:** {pml.get('periodos_entrenados', 0)} periodos mensuales analizados.",
+                    f"* **Pronóstico Estimado ({pml.get('proximo_mes', 'N/A')}):** "
+                    f"**{pml.get('prediccion_estimada', 0)} casos/atenciones estimadas** "
+                    f"(margen de variación esperado: ±{pml.get('margen_error_mae', 0.0)}).",
+                    f"* **Comportamiento Histórico Aprendido:** Tendencia "
+                    f"**{pml.get('tendencia', 'Estable')}** "
+                    f"(ritmo estimado: {pml.get('tasa_cambio_mensual', 0.0):+} casos/mes).",
+                    f"* **Historial Clínico Evaluado:** "
+                    f"{pml.get('periodos_entrenados', 0)} periodos mensuales analizados.",
                     "* **Indicadores de Calidad del Pronóstico:**",
                     f"  - Confiabilidad del Ajuste (R²): {me.get('r2_score', 0.0)}",
                     f"  - Margen de Error Promedio (MAE): ±{me.get('mae', 0.0)} casos",
                     f"  - Desviación Cuadrática Típica (RMSE): {me.get('rmse', 0.0)}",
-                    f"  *(Modelo predictivo basado en {pml.get('algoritmo', 'Regresión Lineal OLS sobre series temporales')})*.",
+                    "  *(Modelo predictivo basado en "
+                    f"{pml.get('algoritmo', 'Regresión Lineal OLS sobre series temporales')})*.",
                 ]
             )
 

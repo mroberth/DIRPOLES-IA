@@ -11,17 +11,19 @@ Verifica:
 
 import unittest
 
-from fastapi.testclient import TestClient
-
 from app.core.config import obtener_ajustes
 from app.main import app
 from app.schemas.v2 import AnalisisResponseV2DTO
+from fastapi.testclient import TestClient
 
 
 class TestApiV2Universal(unittest.TestCase):
     def setUp(self) -> None:
         self.cliente = TestClient(app)
         self.ajustes = obtener_ajustes()
+        # La suite debe ser determinista: este caso valida el contrato V2, no
+        # la latencia ni la redacción variable del proveedor LLM real.
+        self.ajustes.mock_llm = True
         self.cabeceras_auth = {"X-API-Key": self.ajustes.dirpoles_ia_api_key}
 
     def test_auth_401_sin_api_key(self) -> None:

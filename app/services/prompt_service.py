@@ -1,40 +1,22 @@
 import json
 import re
+from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from app.knowledge.base import BaseConocimiento
 from app.knowledge.dirpoles4 import (
-    CAMPOS_PERMITIDOS_LLM,
-    CATALOGO_PNF_OFICIAL,
     DIRECTRICES_CANONICAS,
-    DISTRIBUCIONES_PERMITIDAS_LLM,
     DOMINIOS_DISTRIBUCIONES,
     ENFOQUE_POR_INTENCION,
     ESTADOS_JORNADA_VALIDOS,
-    PLANTILLAS_ALERTAS_AUTORIZADAS,
     ROLES_POR_MODULO,
     es_alerta_autorizada,
     resolver_observacion_para_prompt,
     sanitizar_observacion_usuario,
 )
-from app.schemas.enums import (
-    AreaGeneral,
-    EstadoCita,
-    EstadoInventario,
-    EstadoJornada,
-    EstadoReferencia,
-    Genero,
-    GradoDiscapacidad,
-    Intencion,
-    Modulo,
-    SubmoduloTrabajoSocial,
-    TipoBien,
-    TipoConsultaPsicologica,
-    TipoDiscapacidad,
-    TipoVehiculo,
-)
+from app.schemas.enums import Intencion, Modulo
 
 
 def construir_system_prompt(modulo: Modulo, conocimiento: BaseConocimiento | None = None) -> str:
@@ -42,11 +24,28 @@ def construir_system_prompt(modulo: Modulo, conocimiento: BaseConocimiento | Non
 
     kb = conocimiento or obtener_conocimiento_por_defecto()
     rol = kb.obtener_rol(modulo)
+
+    # Las instrucciones y directrices son conocimiento declarativo: viven en la
+    # base de datos y se leen a través del protocolo BaseConocimiento. Se usa
+    # getattr para mantener compatibilidad con bases de conocimiento externas
+    # que solo implementan el contrato mínimo (rol, enfoque, dominios, alertas).
+    obtener_instrucciones = getattr(kb, "obtener_instrucciones_sistema", None)
+    instrucciones = obtener_instrucciones(modulo) if callable(obtener_instrucciones) else ""
+    obtener_privacidad = getattr(kb, "obtener_directrices_privacidad", None)
+    privacidad = obtener_privacidad(modulo) if callable(obtener_privacidad) else ""
+
+    bloque_instrucciones = f"{instrucciones}\n\n" if instrucciones else ""
+    bloque_privacidad = (
+        f"DIRECTRICES DE PRIVACIDAD Y DEONTOLOGÍA:\n{privacidad}\n\n" if privacidad else ""
+    )
+
     return (
         f"Eres un {rol} para la UPTAEB.\n"
+        f"{bloque_instrucciones}"
         "Tu objetivo es redactar un informe ejecutivo de alto nivel, altamente visual, "
         "estructurado y profesional basado EXCLUSIVAMENTE en los datos estadísticos "
         "procesados suministrados por la capa analítica en Pandas.\n\n"
+        f"{bloque_privacidad}"
         "REGLAS OBLIGATORIAS DE FORMATO VISUAL:\n"
         "1. Estructura el informe con encabezados claros (### y ####).\n"
         "2. NUNCA presentes distribuciones o métricas comparativas como simples listas de texto: "
@@ -58,9 +57,11 @@ def construir_system_prompt(modulo: Modulo, conocimiento: BaseConocimiento | Non
         "representando la distribución de datos más importante.\n"
         "4. Usa bloques de cita (> ⚠️ **Punto Crítico:** ...) para resaltar alertas u "
         "observaciones que requieran atención inmediata.\n"
-        "5. LENGUAJE CLARO Y ACCESIBLE: Si incluyes proyecciones o métricas de Machine Learning (R², MAE, RMSE), "
-        "exprésalas en lenguaje comprensible para personal de salud o directivo (ej: 'Pronóstico para el próximo mes', "
-        "'Confiabilidad del Pronóstico (R²)', 'Margen de Variación Esperado (MAE: ±X casos)'). NUNCA uses símbolos de dólar $ en las siglas.\n"
+        "5. LENGUAJE CLARO Y ACCESIBLE: Si incluyes proyecciones o métricas de Machine "
+        "Learning (R², MAE, RMSE), exprésalas en lenguaje comprensible para personal de "
+        "salud o directivo (ej: 'Pronóstico para el próximo mes', 'Confiabilidad del "
+        "Pronóstico (R²)', 'Margen de Variación Esperado (MAE: ±X casos)'). NUNCA uses "
+        "símbolos de dólar $ en las siglas.\n"
         "6. No inventes cifras: cíñete estrictamente a los datos recibidos."
     )
 
@@ -174,9 +175,11 @@ class ItemOcupacionJornada(BaseModel):
 
     @field_validator("estatus")
     @classmethod
-    def validar_estatus_jornada(cls, v: str) -> str:
+    def validar_estatus_jornada(cls, v: str, info: ValidationInfo) -> str:
         v_str = str(v).strip()
-        if v_str in ESTADOS_JORNADA_VALIDOS:
+        catalogos = (info.context or {}).get("catalogos", {})
+        estados_validos = catalogos.get("estado_jornada", ESTADOS_JORNADA_VALIDOS)
+        if v_str in estados_validos:
             return v_str
         return "No especificado"
 
@@ -249,13 +252,17 @@ class ContextoAnaliticoSeguro(BaseModel):
     @field_validator("distribuciones")
     @classmethod
     def validar_distribuciones_autorizadas(
-        cls, v: dict[str, list[DistribucionItem]]
+        cls,
+        v: dict[str, list[DistribucionItem]],
+        info: ValidationInfo,
     ) -> dict[str, list[DistribucionItem]]:
+        contexto = info.context or {}
+        dominios: dict[str, frozenset[str]] = contexto.get("dominios", DOMINIOS_DISTRIBUCIONES)
         dist_filtradas: dict[str, list[DistribucionItem]] = {}
         for k, items in v.items():
-            if k not in DOMINIOS_DISTRIBUCIONES:
+            if k not in dominios:
                 continue
-            dominio = DOMINIOS_DISTRIBUCIONES[k]
+            dominio = dominios[k]
             if all(item.valor in dominio for item in items):
                 dist_filtradas[k] = items
         return dist_filtradas
@@ -263,14 +270,25 @@ class ContextoAnaliticoSeguro(BaseModel):
     @field_validator("alertas")
     @classmethod
     def validar_alertas_autorizadas(
-        cls, v: list[AlertaContexto]
+        cls,
+        v: list[AlertaContexto],
+        info: ValidationInfo,
     ) -> list[AlertaContexto]:
-        return [alt for alt in v if es_alerta_autorizada(alt.mensaje, alt.nivel)]
+        contexto = info.context or {}
+        validador = contexto.get("validador_alerta", es_alerta_autorizada)
+        return [alt for alt in v if validador(alt.mensaje, alt.nivel)]
 
 
-
-def _sanitizar_estructura_anidada(resumen: dict[str, Any]) -> dict[str, Any]:
+def _sanitizar_estructura_anidada(
+    resumen: dict[str, Any],
+    dominios: dict[str, frozenset[str]] | None = None,
+    validador_alerta: Callable[[str, str], bool] | None = None,
+    catalogos: dict[str, frozenset[str]] | None = None,
+) -> dict[str, Any]:
     """Prefiltra estructuras anidadas para retener exclusivamente campos tipados conocidos."""
+    dominios_autorizados = dominios if dominios is not None else DOMINIOS_DISTRIBUCIONES
+    catalogos_autorizados = catalogos or {}
+    validar_alerta = validador_alerta or es_alerta_autorizada
     salida: dict[str, Any] = {}
 
     if "modulo" in resumen and isinstance(resumen["modulo"], (str, Modulo)):
@@ -299,11 +317,11 @@ def _sanitizar_estructura_anidada(resumen: dict[str, Any]) -> dict[str, Any]:
                 totales[k] = int(v)
     salida["totales"] = totales
 
-    # Distribuciones: extracción positiva estricta contra DOMINIOS_DISTRIBUCIONES
+    # Distribuciones: extracción positiva estricta contra los dominios autorizados
     distribuciones: dict[str, list[dict[str, Any]]] = {}
     if "distribuciones" in resumen and isinstance(resumen["distribuciones"], dict):
         raw_dist = resumen["distribuciones"]
-        for dist_clave, dominio_autorizado in DOMINIOS_DISTRIBUCIONES.items():
+        for dist_clave, dominio_autorizado in dominios_autorizados.items():
             if dist_clave in raw_dist and isinstance(raw_dist[dist_clave], list):
                 items_candidatos = raw_dist[dist_clave]
                 items_validos: list[dict[str, Any]] = []
@@ -386,8 +404,8 @@ def _sanitizar_estructura_anidada(resumen: dict[str, Any]) -> dict[str, Any]:
 
     # Top areas concentracion (solo admitir categorias de area aprobadas)
     top_areas: list[dict[str, Any]] = []
-    areas_aprobadas = frozenset(
-        {"Becas", "Exoneración", "FAMES", "Medicina", "Orientación", "Discapacidad", "Psicología"}
+    areas_aprobadas = catalogos_autorizados.get(
+        "area", dominios_autorizados.get("por_area", frozenset())
     )
     if "top_areas_concentracion" in resumen and isinstance(
         resumen["top_areas_concentracion"], list
@@ -440,9 +458,12 @@ def _sanitizar_estructura_anidada(resumen: dict[str, Any]) -> dict[str, Any]:
                 for idx, oj in enumerate(iv, start=1):
                     if isinstance(oj, dict):
                         estatus_candidato = str(oj.get("estatus", "")).strip()
+                        estados_jornada = catalogos_autorizados.get(
+                            "estado_jornada", ESTADOS_JORNADA_VALIDOS
+                        )
                         estatus_seguro = (
                             estatus_candidato
-                            if estatus_candidato in ESTADOS_JORNADA_VALIDOS
+                            if estatus_candidato in estados_jornada
                             else "No especificado"
                         )
                         ocup.append(
@@ -484,7 +505,7 @@ def _sanitizar_estructura_anidada(resumen: dict[str, Any]) -> dict[str, Any]:
                 }
                 # Solo por_tipo tiene dominio controlado demostrado en transporte (TipoVehiculo)
                 if "por_tipo" in sv and isinstance(sv["por_tipo"], list):
-                    dominio_tipo = DOMINIOS_DISTRIBUCIONES["por_tipo"]
+                    dominio_tipo = dominios_autorizados["por_tipo"]
                     items_tipo = []
                     todos_tipo_validos = True
                     for d in sv["por_tipo"]:
@@ -527,7 +548,7 @@ def _sanitizar_estructura_anidada(resumen: dict[str, Any]) -> dict[str, Any]:
                 mensaje_raw = str(alt["mensaje"]).strip()
                 # Cuando una alerta no pueda vincularse a un mensaje autorizado,
                 # no se transmite su texto original hacia el contexto externo.
-                if es_alerta_autorizada(mensaje_raw, nivel_seguro):
+                if validar_alerta(mensaje_raw, nivel_seguro):
                     alertas_saneadas.append(
                         {
                             "nivel": nivel_seguro,
@@ -537,10 +558,11 @@ def _sanitizar_estructura_anidada(resumen: dict[str, Any]) -> dict[str, Any]:
     salida["alertas"] = alertas_saneadas
 
     # Predicción Machine Learning (series temporales)
-    if "prediccion_ml" in resumen and isinstance(resumen["prediccion_ml"], dict):
-        pml = resumen["prediccion_ml"]
+    pml = resumen.get("prediccion_ml")
+    if isinstance(pml, dict):
         if pml.get("disponible") is True:
-            me = pml.get("metricas_evaluacion") if isinstance(pml.get("metricas_evaluacion"), dict) else {}
+            metricas_candidato = pml.get("metricas_evaluacion")
+            me = metricas_candidato if isinstance(metricas_candidato, dict) else {}
             salida["prediccion_ml"] = {
                 "disponible": True,
                 "algoritmo": str(pml.get("algoritmo", "Regresión Lineal OLS"))[:100],
@@ -576,18 +598,42 @@ def filtrar_contexto_seguro(
     todas las estructuras anidadas (alertas, distribuciones, indicadores,
     secciones, comparativas). Emplea validación estricta Pydantic para
     asegurar que ningún dato crudo, centinela o clave ajena sobreviva.
+
+    Los dominios cerrados y las plantillas de alertas provienen de la base de
+    conocimiento activa (MariaDB o fallback estático), no de listas duplicadas
+    en el motor.
     """
-    del conocimiento
+    from app.knowledge import obtener_conocimiento_por_defecto
+
     if not isinstance(resumen, dict):
         return {}
 
-    prefiltrado = _sanitizar_estructura_anidada(resumen)
-    modelo = ContextoAnaliticoSeguro.model_validate(prefiltrado)
+    kb = conocimiento or obtener_conocimiento_por_defecto()
+    dominios = kb.obtener_dominios_distribuciones()
+    obtener_catalogo = getattr(kb, "obtener_catalogo", None)
+    catalogos = (
+        {tipo: obtener_catalogo(tipo) for tipo in ("area", "estado_jornada")}
+        if callable(obtener_catalogo)
+        else {}
+    )
+    validador_alerta = kb.es_alerta_autorizada
+    prefiltrado = _sanitizar_estructura_anidada(resumen, dominios, validador_alerta, catalogos)
+    modelo = ContextoAnaliticoSeguro.model_validate(
+        prefiltrado,
+        context={
+            "dominios": dominios,
+            "catalogos": catalogos,
+            "validador_alerta": validador_alerta,
+        },
+    )
     return modelo.model_dump(exclude_none=False)
 
 
-def _json_resumen(resumen: dict[str, Any]) -> str:
-    contexto_seguro = filtrar_contexto_seguro(resumen)
+def _json_resumen(
+    resumen: dict[str, Any],
+    conocimiento: BaseConocimiento | None = None,
+) -> str:
+    contexto_seguro = filtrar_contexto_seguro(resumen, conocimiento=conocimiento)
     return json.dumps(contexto_seguro, ensure_ascii=False, indent=1, default=str)
 
 
@@ -597,16 +643,22 @@ def resolver_tipo_grafico(
 ) -> str:
     """Regla de inferencia simbólica para selección del tipo de gráfico Mermaid.js.
 
-    1. Si el usuario solicita explícitamente barras ('barra', 'barras', 'columnas', 'histograma') -> 'barras'.
-    2. Si el usuario solicita líneas / tendencia ('linea', 'lineas', 'tendencia', 'historico') -> 'lineas'.
+    1. Si el usuario solicita explícitamente barras ('barra', 'barras', 'columnas',
+       'histograma') -> 'barras'.
+    2. Si el usuario solicita líneas / tendencia ('linea', 'lineas', 'tendencia',
+       'historico') -> 'lineas'.
     3. Si el usuario solicita combinado ('combinado', 'comparativa', 'mixto') -> 'combinado'.
     4. Si el usuario solicita pastel ('pastel', 'dona', 'torta', 'circular', 'pie') -> 'pie'.
-    5. Heurística experta (por defecto): Si alguna distribución principal tiene más de 4 categorías -> 'barras'
+    5. Heurística experta (por defecto): Si alguna distribución principal tiene más
+       de 4 categorías -> 'barras'
        (para evitar saturación visual); si tiene 4 o menos -> 'pie'.
     """
     if observacion and isinstance(observacion, str):
         obs_lower = observacion.lower()
-        if any(term in obs_lower for term in ("barra", "barras", "columna", "columnas", "histograma", "xychart")):
+        if any(
+            term in obs_lower
+            for term in ("barra", "barras", "columna", "columnas", "histograma", "xychart")
+        ):
             return "barras"
         if any(term in obs_lower for term in ("linea", "lineas", "tendencia", "historico")):
             return "lineas"
@@ -643,24 +695,38 @@ def construir_user_prompt(
 
     if tipo_grafico == "barras":
         instruccion_grafico = (
-            "AL MENOS UN GRÁFICO VISUAL Mermaid.js OBLIGATORIAMENTE DE BARRAS usando la sintaxis 'xychart-beta' "
-            "(ejemplo: ```mermaid\nxychart-beta\n    title \"...\"\n    x-axis [\"A\", \"B\"]\n    bar [10, 20]\n```). "
-            "Regla de inferencia: el usuario solicitó barras o la cardinalidad supera 4 categorías; NO uses gráfico de pastel (pie). "
-            "REGLA CRÍTICA DE LEGIBILIDAD EN BARRAS: En el x-axis NUNCA coloques nombres largos ni el prefijo redundante 'PNF '; "
-            "usa etiquetas cortas de máximo 12 caracteres (ej: 'Informática', 'Admin.', 'Agroalim.', 'Contaduría') "
+            "AL MENOS UN GRÁFICO VISUAL Mermaid.js OBLIGATORIAMENTE DE BARRAS "
+            "usando la sintaxis 'xychart-beta' "
+            "(ejemplo: ```mermaid\nxychart-beta\n"
+            '    title "..."\n    x-axis ["A", "B"]\n'
+            "    bar [10, 20]\n```). "
+            "Regla de inferencia: el usuario solicitó barras o la cardinalidad supera "
+            "4 categorías; NO uses gráfico de pastel (pie). "
+            "REGLA CRÍTICA DE LEGIBILIDAD EN BARRAS: En el x-axis NUNCA coloques "
+            "nombres largos ni el prefijo redundante 'PNF '; "
+            "usa etiquetas cortas de máximo 12 caracteres (ej: 'Informática', "
+            "'Admin.', 'Agroalim.', 'Contaduría') "
             "para que las etiquetas no se solapen ni se lean pegadas"
         )
     elif tipo_grafico == "lineas":
         instruccion_grafico = (
-            "AL MENOS UN GRÁFICO VISUAL Mermaid.js OBLIGATORIAMENTE DE LÍNEAS / TENDENCIA usando la sintaxis 'xychart-beta' "
-            "(ejemplo: ```mermaid\nxychart-beta\n    title \"...\"\n    x-axis [\"Ene\", \"Feb\"]\n    line [10, 20]\n```). "
-            "Regla de inferencia: el usuario solicitó gráfico de líneas/tendencia; usa 'line [...]' en xychart-beta"
+            "AL MENOS UN GRÁFICO VISUAL Mermaid.js OBLIGATORIAMENTE DE LÍNEAS / "
+            "TENDENCIA usando la sintaxis 'xychart-beta' "
+            "(ejemplo: ```mermaid\nxychart-beta\n"
+            '    title "..."\n    x-axis ["Ene", "Feb"]\n'
+            "    line [10, 20]\n```). "
+            "Regla de inferencia: el usuario solicitó gráfico de líneas/tendencia; "
+            "usa 'line [...]' en xychart-beta"
         )
     elif tipo_grafico == "combinado":
         instruccion_grafico = (
-            "AL MENOS UN GRÁFICO VISUAL Mermaid.js COMBINADO DE BARRAS Y LÍNEAS usando la sintaxis 'xychart-beta' "
-            "(ejemplo: ```mermaid\nxychart-beta\n    title \"...\"\n    x-axis [\"A\", \"B\"]\n    bar [10, 20]\n    line [8, 15]\n```). "
-            "Regla de inferencia: el usuario solicitó gráfico combinado; incluye tanto 'bar [...]' como 'line [...]'"
+            "AL MENOS UN GRÁFICO VISUAL Mermaid.js COMBINADO DE BARRAS Y LÍNEAS "
+            "usando la sintaxis 'xychart-beta' "
+            "(ejemplo: ```mermaid\nxychart-beta\n"
+            '    title "..."\n    x-axis ["A", "B"]\n'
+            "    bar [10, 20]\n    line [8, 15]\n```). "
+            "Regla de inferencia: el usuario solicitó gráfico combinado; "
+            "incluye tanto 'bar [...]' como 'line [...]'"
         )
     else:
         instruccion_grafico = "AL MENOS UN GRÁFICO VISUAL ```mermaid pie o xychart-beta)"
@@ -671,12 +737,13 @@ def construir_user_prompt(
         f"Periodo de Análisis: {fecha_inicio} a {fecha_fin}\n"
         f"Enfoque solicitado: {enfoque}\n\n"
         "DATOS PROCESADOS (Métricas, Agregaciones y Alertas detectadas por Pandas):\n"
-        f"{_json_resumen(contexto_seguro)}\n\n"
+        f"{_json_resumen(contexto_seguro, conocimiento=kb)}\n\n"
         "INSTRUCCIONES ADICIONALES DEL USUARIO:\n"
         f"{observacion}\n\n"
         "REQUISITOS OBLIGATORIOS DE ESTRUCTURA Y FORMATO VISUAL:\n"
         "1. Resumen Ejecutivo (Visión general con métricas destacadas y tabla resumen).\n"
-        f"2. Hallazgos Clave y Puntos Críticos (Incluye tablas de distribución, citas de alertas > ⚠️ y {instruccion_grafico}).\n"
+        "2. Hallazgos Clave y Puntos Críticos (Incluye tablas de distribución, "
+        f"citas de alertas > ⚠️ y {instruccion_grafico}).\n"
         "3. Recomendaciones Operativas para la Toma de Decisiones (Lista numerada priorizada "
         "y concreta)."
     )
@@ -696,3 +763,18 @@ def construir_prompts(
         construir_system_prompt(modulo, conocimiento=kb),
         construir_user_prompt(modulo, intencion, resumen, observacion_usuario, conocimiento=kb),
     )
+
+
+__all__ = [
+    "CAMPOS_PERMITIDOS_LLM",
+    "DIRECTRICES_CANONICAS",
+    "ENFOQUE_POR_INTENCION",
+    "ROLES_POR_MODULO",
+    "construir_prompts",
+    "construir_system_prompt",
+    "construir_user_prompt",
+    "filtrar_contexto_seguro",
+    "resolver_observacion_para_prompt",
+    "resolver_tipo_grafico",
+    "sanitizar_observacion_usuario",
+]
